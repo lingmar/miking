@@ -208,12 +208,12 @@ let hashmapFilterValues : HashMapTraits k -> (v -> Bool) -> HashMap k v -> [v] =
              values
     ) [] hm.buckets
 
--- 'hashmapKeys hm' returns a list of all keys stored in 'hm'
+-- 'hashmapKeys traits hm' returns a list of all keys stored in 'hm'
 let hashmapKeys : HashMapTraits k -> HashMap k v -> [k] =
   lam traits. lam hm.
     hashmapFilterKeys traits (lam _. true) hm
 
--- 'hashmapValues hm' returns a list of all values stored in 'hm'
+-- 'hashmapValues traits hm' returns a list of all values stored in 'hm'
 let hashmapValues : HashMapTraits k -> HashMap k v -> [v] =
   lam traits. lam hm.
     hashmapFilterValues traits (lam _. true) hm
