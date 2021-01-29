@@ -264,7 +264,7 @@ lang ContextAwareHoles = Ast2CallGraph + HoleAst + IntAst + SymbAst
 
     tm
 
-    -- TODO: separate function to introduce global variables, this function just updates caller/callee thing
+    -- Update incoming variables appropriately for function calls
     sem _updateIncVars (fun2inc : Hashmap Name Name) (cur : Name) =
     -- Application: caller updates incoming variable of callee
     | TmLet ({ body = TmApp a } & t) ->
@@ -282,7 +282,7 @@ lang ContextAwareHoles = Ast2CallGraph + HoleAst + IntAst + SymbAst
             (nulet_ (nameSym "_") update) le
         else le
       else le
-    -- Function definition: possibly update cur inside body of function
+    -- Function definitions: possibly update cur inside body of function
     | TmLet ({ body = TmLam lm } & t) ->
       let curBody =
         match hashmapLookup {eq = nameEq, hashfn = _nameHash} t.ident fun2inc
@@ -295,12 +295,14 @@ lang ContextAwareHoles = Ast2CallGraph + HoleAst + IntAst + SymbAst
     | TmRecLets ({ bindings = bindings, inexpr = inexpr } & t) ->
       let newBinds =
         map (lam bind.
-               let curBody =
-                 match hashmapLookup {eq = nameEq, hashfn = _nameHash}
-                                     bind.ident fun2inc
-                 with Some _ then bind.ident
-                 else cur
-               in {bind with body = _updateIncVars fun2inc curBody bind.body})
+               match bind with { body = TmLam lm } then
+                 let curBody =
+                   match hashmapLookup {eq = nameEq, hashfn = _nameHash}
+                                       bind.ident fun2inc
+                   with Some _ then bind.ident
+                   else cur
+                 in {bind with body = _updateIncVars fun2inc curBody bind.body}
+               else {bind with body = _updateIncVars fun2inc cur bind.body})
         bindings
       in TmRecLets {{t with bindings = newBinds}
                      with inexpr = _updateIncVars fun2inc cur inexpr}
