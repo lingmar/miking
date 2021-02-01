@@ -14,6 +14,8 @@ include "hashmap.mc"
 -- * An algorithm for AST -> call graph conversion (Ast2CallGraph fragment)
 -- * Program transformations for programs with decision points (HolyCallGraph)
 
+-- TODO: bundle hashmaps into an env and call graph
+
 let _top = nameSym "top"
 
 let _projName = nameSym "x"
@@ -37,8 +39,7 @@ let _getSym = lam n.
     (nameGetSym n))
 
 let _nameHash = lam n.
-  match nameGetSym n with Some s then sym2hash s
-  else hashmapStrTraits (nameGetStr n)
+  sym2hash (_getSym n)
 
 lang HoleAst
   syn Expr =
@@ -61,11 +62,9 @@ lang HolePrettyPrint = HoleAst + TypePrettyPrint
 
   sem pprintCode (indent : Int) (env : SymEnv) =
   | TmHole h ->
-    match pprintCode indent env h.startGuess with (env1, startStr) then
-      match pprintCode indent env1 h.depth with (env2, depthStr) then
-        (env2,
-           join ["Hole (", strJoin ", " [startStr, depthStr],")"])
-      else never
+    match pprintCode indent env h.startGuess with (env, startStr) then
+      (env,
+         join ["Hole (", startStr, ", ", int2string h.depth, ")"])
     else never
 end
 
@@ -163,6 +162,25 @@ lang Ast2CallGraph = LetAst + FunAst + RecLetsAst
     sfold_Expr_Expr digraphUnion cg (smap_Expr_Expr (_findEdges cg prev) tm)
 end
 
+-- Type of context dependent information needed in transformations
+type ContextInfo = {
+
+  -- Call graph of the program.
+  callGraph: DiGraph Name Symbol,
+
+  -- Maps names of functions to the name of its incoming variable. The incoming
+  -- variables are used to keep track of the execution path.
+  fun2inc: Hashmap Name Name,
+
+  -- Maps edge labels in the call graph to the incoming variable name of its
+  -- from-node.
+  lbl2inc: Hashmap Symbol Name,
+
+  -- List of public functions in the program.
+  publicFns: [Name]
+
+}
+
 -- Type of a function for looking up decision points assignments
 type Lookup v = Symbol -> [Symbol] -> v
 type Skeleton v = Lookup v -> Expr
@@ -182,8 +200,89 @@ let _nestedAppGetCallee = use AppAst in use VarAst in lam tm.
     else None ()
   in work tm
 
+-- Partition into categories empty ++ ending symbol
+-- Match exhaustive on the cases, before recursive call remove ending symbol
+
+let defaultLookup = int_ 1
+
+let _lookupCallCtx : Name -> ContextInfo -> [[Symbol]] -> Expr = use MatchAst in use NeverAst in
+  lam incVarName. lam info. lam paths.
+    match info with { lbl2inc = lbl2inc } then
+      -- TODO: Represent paths as trees, then this partition becomes trivial
+      let partitionPaths : [[Symbol]] -> ([Symbol], [[[Symbol]]]) = lam paths.
+        let startVals = foldl (lam acc. lam p.
+                                 setInsert eqsym (head p) acc)
+                              [] paths in
+        let partition = (makeSeq (length startVals) []) in
+        let partition =
+          mapi
+            (lam i. lam _. filter (lam p. eqsym (head p) (get startVals i)) paths)
+            partition
+        in
+        (startVals, partition)
+      in
+      let s1 = gensym () in
+      let s2 = gensym () in
+      utest partitionPaths [[s1, s2], [s1], [s2], [s2,s2]] with ([s1, s2], [[[s1, s2], [s1]], [[s2], [s2, s2]]]) in
+
+      recursive let work : Name -> [[Symbol]] -> [Symbol] -> Expr =
+        lam incVarName. lam paths. lam acc.
+          let nonEmpty = filter (lam p. not (null p)) paths in
+          match partitionPaths nonEmpty with (startVals, partition) then
+            let branches =
+              mapi (lam i. lam s.
+                      match hashmapLookup {eq = eqsym, hashfn = sym2hash} s lbl2inc
+                      with Some iv then
+                        matchex_ (eqsym_ (deref_ (nvar_ incVarName)) (symb_ s)) (ptrue_)
+                                 (work iv (map tail (get partition i)) (cons s acc))
+                      else error "Internal error: lookup failed")
+                   startVals
+            in
+            let defaultVal =
+              if eqi (length nonEmpty) (length paths) then never_
+              else defaultLookup
+            in
+            matchall_ (snoc branches defaultVal)
+          else never
+        in
+
+      work incVarName (map reverse paths) []
+    else never
+
+
+
 --
-lang ContextAwareHoles = Ast2CallGraph + HoleAst + IntAst + SymbAst
+lang ContextAwareHoles = Ast2CallGraph + HoleAst + IntAst + SymbAst + MatchAst + NeverAst
+                         + MExprPrettyPrint
+  -- Initialise context information
+  sem _initContextInfo (publicFns : [Name]) =
+  | tm ->
+  let callGraph = toCallGraph tm in
+  let fun2inc =
+    foldl (lam acc. lam funName.
+             let incVarName = nameSym (concat "inc" (nameGetStr funName)) in
+             hashmapInsert {eq = nameEq, hashfn = _nameHash}
+               funName incVarName acc)
+          hashmapEmpty
+          (digraphVertices callGraph)
+  in
+  let lbl2inc =
+    foldl (lam acc. lam edge.
+             match edge with (fromVtx, _, lbl) then
+               let incVarName =
+                 optionGetOrElse (lam _. error "Internal error: lookup failed")
+                   (hashmapLookup {eq = nameEq, hashfn = _nameHash}
+                      fromVtx fun2inc)
+               in hashmapInsert {eq = eqsym, hashfn = sym2hash}
+                    lbl incVarName acc
+             else never)
+          hashmapEmpty
+          (digraphEdges callGraph)
+  in
+
+  {callGraph = callGraph, fun2inc = fun2inc, lbl2inc = lbl2inc, publicFns = publicFns}
+
+
   -- Find the initial mapping from decision points to values
   -- Returns a function of type 'Lookup v'.
   sem initAssignments =
@@ -221,94 +320,85 @@ lang ContextAwareHoles = Ast2CallGraph + HoleAst + IntAst + SymbAst
   -- have been replaced by values given by the lookup function.
   sem transform (publicFns : [Name]) =
   | tm ->
-    -- Compute the call graph
-    let cg = toCallGraph tm in
-
-    -- Map node in call graph (name) -> incoming variable name
-    -- This information is needed when tracing the execution path.
-    let fun2inc =
-      foldl (lam acc. lam funName.
-               let incVarName = nameSym (concat "inc" (nameGetStr funName)) in
-               hashmapInsert {eq = nameEq, hashfn = _nameHash}
-                             funName incVarName acc)
-            hashmapEmpty
-            (digraphVertices cg)
-    in
-    -- Map edge label in call graph (symbol) -> incoming variable name for its from-node
-    -- This information is needed when tracing the execution path.
-    -- OPT(Linnea, 2021-01-29): Use relevant labels only (those present in eqPaths)
-    let lbl2inc =
-      foldl (lam acc. lam edge.
-               match edge with (fromVtx, _, lbl) then
-                 let incVarName =
-                   hashmapLookup {eq = nameEq, hashfn = _nameHash}
-                                 fromVtx fun2inc
-                 in hashmapInsert {eq = nameEq, hashfn = _nameHash}
-                                  lbl incVarName
-               else never)
-            hashmapEmpty
-            (digraphEdges cg)
-    in
-
+    let info = _initContextInfo publicFns tm in
     -- Declare the incoming variables
     let incVars =
       bindall_ (map (lam incVarName. nulet_ incVarName (ref_ (symb_ _incomingUndef)))
-                    (hashmapValues {eq = nameEq, hashfn = _nameHash} fun2inc))
+                    (hashmapValues {eq = nameEq, hashfn = _nameHash} info.fun2inc))
     in
-    -- Introduce the incoming variables as global variables
     let tm = bind_ incVars tm in
     -- Make sure caller updates the incoming variable for its callee
-    let tm = _updateIncVars fun2inc _top tm in
-
-    -- Replace each decision point with appropriate match statements, given the equivalence paths
-
+    let tm = _updateIncVars info _top tm in
+   -- Replace each decision point with appropriate match statements, given the equivalence paths
     tm
 
+
     -- Update incoming variables appropriately for function calls
-    sem _updateIncVars (fun2inc : Hashmap Name Name) (cur : Name) =
+    sem _updateIncVars (info : ContextInfo) (cur : Name) =
     -- Application: caller updates incoming variable of callee
     | TmLet ({ body = TmApp a } & t) ->
-      -- NOTE(Linnea, 2021-01-29): ANF form means no recursion necessary for the
-      -- body of this let expression (cannot contain function definitions or
-      -- calls)
-      let le = TmLet {t with inexpr = _updateIncVars fun2inc cur t.inexpr} in
-      match _nestedAppGetCallee (TmApp a) with Some callee then
-        match hashmapLookup {eq = nameEq, hashfn = _nameHash} callee fun2inc
-        with Some iv then
-          -- Set the incoming var of callee to current node
-          let _ = printLn (join ["Calling ", nameGetStr callee, " from ", nameGetStr cur]) in
-          let update = modref_ (nvar_ iv) (symb_ (_getSym cur)) in
-          bind_
-            (nulet_ (nameSym "_") update) le
+      match info with { fun2inc = fun2inc } then
+        -- NOTE(Linnea, 2021-01-29): ANF form means no recursion necessary for an
+        -- application node (cannot contain function definitions or calls)
+        -- TODO(linnea, 2021-02-01): Double check.
+        let le = TmLet {t with inexpr = _updateIncVars info cur t.inexpr} in
+        match _nestedAppGetCallee (TmApp a) with Some callee then
+          match hashmapLookup {eq = nameEq, hashfn = _nameHash} callee fun2inc
+          with Some iv then
+            -- Set the incoming var of callee to current node
+            -- TODO: should be symbol of the application node, not cur
+            --let _ = printLn (join ["Calling ", nameGetStr callee, " from ", nameGetStr cur]) in
+            let update = modref_ (nvar_ iv) (symb_ (_getSym cur)) in
+            bind_
+              (nulet_ (nameSym "_") update) le
+          else le
         else le
-      else le
+      else never
+
+      -- Decision point: lookup the value depending on calling context
+     | TmHole ({ depth = depth } & t) ->
+       match info with
+        { callGraph = callGraph, publicFns = publicFns, fun2inc = fun2inc }
+       then
+         let paths = eqPaths callGraph cur depth publicFns in
+         match hashmapLookup {eq = nameEq, hashfn = _nameHash} cur fun2inc
+         with Some iv then
+           let lookup = _lookupCallCtx iv info paths in
+           let _ = dprint lookup in
+           let _ = printLn (concat "\n\nLookup code:\n" (expr2str lookup)) in
+           lookup
+         else error "Decision point must be defined within a named function"
+       else never
+
     -- Function definitions: possibly update cur inside body of function
     | TmLet ({ body = TmLam lm } & t) ->
-      let curBody =
-        match hashmapLookup {eq = nameEq, hashfn = _nameHash} t.ident fun2inc
-        with Some _ then
-          t.ident
-        else cur
-     in TmLet {{t with body = _updateIncVars fun2inc curBody t.body}
-                with inexpr = _updateIncVars fun2inc cur t.inexpr}
+      match info with { fun2inc = fun2inc } then
+        let curBody =
+          if hashmapMem {eq = nameEq, hashfn = _nameHash} t.ident fun2inc
+          then t.ident
+          else cur
+       in TmLet {{t with body = _updateIncVars info curBody t.body}
+                  with inexpr = _updateIncVars info cur t.inexpr}
+     else never
 
     | TmRecLets ({ bindings = bindings, inexpr = inexpr } & t) ->
-      let newBinds =
-        map (lam bind.
-               match bind with { body = TmLam lm } then
-                 let curBody =
-                   match hashmapLookup {eq = nameEq, hashfn = _nameHash}
-                                       bind.ident fun2inc
-                   with Some _ then bind.ident
-                   else cur
-                 in {bind with body = _updateIncVars fun2inc curBody bind.body}
-               else {bind with body = _updateIncVars fun2inc cur bind.body})
-        bindings
-      in TmRecLets {{t with bindings = newBinds}
-                     with inexpr = _updateIncVars fun2inc cur inexpr}
-
+      match info with { fun2inc = fun2inc } then
+        let newBinds =
+          map (lam bind.
+                 match bind with { body = TmLam lm } then
+                   let curBody =
+                     if hashmapMem {eq = nameEq, hashfn = _nameHash}
+                             bind.ident fun2inc
+                     then bind.ident
+                     else cur
+                   in {bind with body = _updateIncVars info curBody bind.body}
+                 else {bind with body = _updateIncVars info cur bind.body})
+          bindings
+        in TmRecLets {{t with bindings = newBinds}
+                       with inexpr = _updateIncVars info cur inexpr}
+      else never
     | tm ->
-      smap_Expr_Expr (_updateIncVars fun2inc cur) tm
+      smap_Expr_Expr (_updateIncVars info cur) tm
 end
 
 lang PPrintLang = MExprPrettyPrint + HolePrettyPrint
@@ -327,9 +417,10 @@ let s2 = gensym () in
 let y = nameSetSym (nameNoSym "y") s2 in
 
 
-let ast = anf (ulet_ "f" (bindall_ [ulet_ "x" (ulam_ "x" (nulet_ x (hole_ true_ (int_ 2)))),
-                                    ulet_ "y" (ulam_ "y" (nulet_ y (hole_ false_ (int_ 1)))),
-                                    app_ (var_ "x") (int_ 1)] )) in
+let ast = anf (ulet_ "f" (bindall_ [ulet_ "x" (ulam_ "x" (nulet_ x (hole_ true_ 2))),
+                                    ulet_ "y" (ulam_ "y" (nulet_ y (hole_ false_ 1))),
+                                    ulet_ "_" (app_ (var_ "x") (int_ 1)),
+                                    ulet_ "_" (app_ (var_ "x") (int_ 1))] )) in
 
 let _ = print (expr2str ast) in
 
@@ -360,6 +451,6 @@ in
 let ast = anf ast in
 
 let ast = transform [] ast in
-let _ = printLn (expr2str ast) in
+--let _ = printLn (expr2str ast) in
 
 ()
