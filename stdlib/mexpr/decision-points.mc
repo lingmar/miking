@@ -346,9 +346,8 @@ lang ContextAwareHoles = Ast2CallGraph + HoleAst + IntAst + SymbAst + MatchAst +
           match hashmapLookup {eq = nameEq, hashfn = _nameHash} callee fun2inc
           with Some iv then
             -- Set the incoming var of callee to current node
-            -- TODO: should be symbol of the application node, not cur
             --let _ = printLn (join ["Calling ", nameGetStr callee, " from ", nameGetStr cur]) in
-            let update = modref_ (nvar_ iv) (symb_ (_getSym cur)) in
+            let update = modref_ (nvar_ iv) (symb_ (_getSym t.ident)) in
             bind_
               (nulet_ (nameSym "_") update) le
           else le
