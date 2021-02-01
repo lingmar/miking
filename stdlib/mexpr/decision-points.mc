@@ -205,8 +205,8 @@ let _nestedAppGetCallee = use AppAst in use VarAst in lam tm.
 
 let defaultLookup = int_ 1
 
-let _lookupCallCtx : Name -> ContextInfo -> [[Symbol]] -> Expr = use MatchAst in use NeverAst in
-  lam incVarName. lam info. lam paths.
+let _lookupCallCtx : Lookup v -> Symbol -> Name -> ContextInfo -> [[Symbol]] -> Skeleton v = use MatchAst in use NeverAst in
+  lam lookup. lam holeId. lam incVarName. lam info. lam paths.
     match info with { lbl2inc = lbl2inc } then
       -- TODO: Represent paths as trees, then this partition becomes trivial
       let partitionPaths : [[Symbol]] -> ([Symbol], [[[Symbol]]]) = lam paths.
@@ -240,7 +240,7 @@ let _lookupCallCtx : Name -> ContextInfo -> [[Symbol]] -> Expr = use MatchAst in
             in
             let defaultVal =
               if eqi (length nonEmpty) (length paths) then never_
-              else defaultLookup
+              else lookup holeId acc
             in
             matchall_ (snoc branches defaultVal)
           else never
@@ -328,20 +328,20 @@ lang ContextAwareHoles = Ast2CallGraph + HoleAst + IntAst + SymbAst + MatchAst +
     in
     let tm = bind_ incVars tm in
     -- Make sure caller updates the incoming variable for its callee
-    let tm = _updateIncVars info _top tm in
+    let skel = lam lookup. _updateIncVars lookup info _top tm in
    -- Replace each decision point with appropriate match statements, given the equivalence paths
-    tm
+    skel
 
 
     -- Update incoming variables appropriately for function calls
-    sem _updateIncVars (info : ContextInfo) (cur : Name) =
+    sem _updateIncVars (lookup : Lookup v) (info : ContextInfo) (cur : Name) =
     -- Application: caller updates incoming variable of callee
     | TmLet ({ body = TmApp a } & t) ->
       match info with { fun2inc = fun2inc } then
         -- NOTE(Linnea, 2021-01-29): ANF form means no recursion necessary for an
         -- application node (cannot contain function definitions or calls)
         -- TODO(linnea, 2021-02-01): Double check.
-        let le = TmLet {t with inexpr = _updateIncVars info cur t.inexpr} in
+        let le = TmLet {t with inexpr = _updateIncVars lookup info cur t.inexpr} in
         match _nestedAppGetCallee (TmApp a) with Some callee then
           match hashmapLookup {eq = nameEq, hashfn = _nameHash} callee fun2inc
           with Some iv then
@@ -355,18 +355,20 @@ lang ContextAwareHoles = Ast2CallGraph + HoleAst + IntAst + SymbAst + MatchAst +
         else le
       else never
 
-      -- Decision point: lookup the value depending on calling context
-     | TmHole ({ depth = depth } & t) ->
+    -- Decision point: lookup the value depending on calling context
+    | TmLet ({ body = TmHole { depth = depth }, ident = ident} & t) ->
        match info with
         { callGraph = callGraph, publicFns = publicFns, fun2inc = fun2inc }
        then
          let paths = eqPaths callGraph cur depth publicFns in
          match hashmapLookup {eq = nameEq, hashfn = _nameHash} cur fun2inc
          with Some iv then
-           let lookup = _lookupCallCtx iv info paths in
+           let id = _getSym ident in
+           let lookup = _lookupCallCtx lookup id iv info paths in
            let _ = dprint lookup in
            let _ = printLn (concat "\n\nLookup code:\n" (expr2str lookup)) in
-           lookup
+           TmLet {{t with body = lookup}
+                  with inexpr = _updateIncVars lookup info cur t.inexpr}
          else error "Decision point must be defined within a named function"
        else never
 
@@ -377,8 +379,8 @@ lang ContextAwareHoles = Ast2CallGraph + HoleAst + IntAst + SymbAst + MatchAst +
           if hashmapMem {eq = nameEq, hashfn = _nameHash} t.ident fun2inc
           then t.ident
           else cur
-       in TmLet {{t with body = _updateIncVars info curBody t.body}
-                  with inexpr = _updateIncVars info cur t.inexpr}
+       in TmLet {{t with body = _updateIncVars lookup info curBody t.body}
+                  with inexpr = _updateIncVars lookup info cur t.inexpr}
      else never
 
     | TmRecLets ({ bindings = bindings, inexpr = inexpr } & t) ->
@@ -391,14 +393,14 @@ lang ContextAwareHoles = Ast2CallGraph + HoleAst + IntAst + SymbAst + MatchAst +
                              bind.ident fun2inc
                      then bind.ident
                      else cur
-                   in {bind with body = _updateIncVars info curBody bind.body}
-                 else {bind with body = _updateIncVars info cur bind.body})
+                   in {bind with body = _updateIncVars lookup info curBody bind.body}
+                 else {bind with body = _updateIncVars lookup info cur bind.body})
           bindings
         in TmRecLets {{t with bindings = newBinds}
-                       with inexpr = _updateIncVars info cur inexpr}
+                       with inexpr = _updateIncVars lookup info cur inexpr}
       else never
     | tm ->
-      smap_Expr_Expr (_updateIncVars info cur) tm
+      smap_Expr_Expr (_updateIncVars lookup info cur) tm
 end
 
 lang PPrintLang = MExprPrettyPrint + HolePrettyPrint
@@ -434,8 +436,8 @@ let _ = dprint (lookup s2 []) in
 let _ = printLn "\n" in
 
 let _ = printLn "\n-- Transform -- \n" in
-let ast = transform [] ast in
-let _ = print (expr2str ast) in
+let skel = transform [] ast in
+let _ = print (expr2str (skel lookup)) in
 --let _ = dprint ast in
 
 let ast = bind_
@@ -450,7 +452,8 @@ let ast = bind_
 in
 let ast = anf ast in
 
-let ast = transform [] ast in
---let _ = printLn (expr2str ast) in
+let skel = transform [] ast in
+let lookup = initAssignments ast in
+let _ = printLn (expr2str (skel lookup)) in
 
 ()
