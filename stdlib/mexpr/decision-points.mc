@@ -14,7 +14,8 @@ include "hashmap.mc"
 -- * An algorithm for AST -> call graph conversion (Ast2CallGraph fragment)
 -- * Program transformations for programs with decision points (HolyCallGraph)
 
--- TODO: bundle hashmaps into an env and call graph
+-- TODO: use names instead of symbols for easier debugging
+
 
 let _top = nameSym "top"
 
