@@ -15,10 +15,104 @@ include "hashmap.mc"
 -- Enable debugging of symbols in pprint?
 -- Represent paths as trees?
 -- Handle public functions: make dummy nodes and match in lookup
--- Map edge symbols to integers (0, 1, 2, ... for each node)
+-- Use names instead of symbols for edge labels
+
+let _getSym = lam n.
+  optionGetOrElse
+    (lam _. error "Expected symbol")
+    (nameGetSym n)
 
 
-let _top = nameSym "top"
+-------------------------
+-- Call graph creation --
+-------------------------
+
+-- The type of the call graph. Vertices are names of function identifiers, edges
+-- are names of application nodes.
+type CallGraph = DiGraph Name Symbol
+
+-- The top of the call graph, has no incoming edges.
+let _callGraphTop = nameSym "top"
+
+-- Create a call graph from an AST.
+-- * Vertices (identifier names) are functions f defined as: let f = lam. ...
+-- * There is an edge between f1 and f2 iff f1 calls f2: let f1 = lam. ... (f2 a)
+-- * "top" is the top of the graph (i.e., no incoming edges)
+
+let _handleLetVertex = use FunAst in
+  lam letexpr. lam f.
+    match letexpr.body with TmLam lm
+    then cons letexpr.ident (f lm.body)
+    else f letexpr.body
+
+let _handleLetEdge = use FunAst in
+  lam letexpr. lam f. lam g. lam prev.
+    match letexpr.body with TmLam lm
+    then f g letexpr.ident lm.body
+    else f g prev letexpr.body
+
+let _handleApps = use AppAst in use VarAst in
+  lam id. lam f. lam prev. lam g. lam app.
+    recursive let appHelper = lam g. lam app.
+      match app with TmApp {lhs = TmVar v, rhs = rhs} then
+        let resLhs =
+          if digraphHasVertex v.ident g then
+            digraphAddEdge prev v.ident id g
+          else g
+        in f resLhs prev rhs
+      else match app with TmApp ({lhs = TmApp a, rhs = rhs}) then
+        let resLhs = appHelper g (TmApp a) in
+        f resLhs prev rhs
+      else match app with TmApp a then
+        f (f g prev a.lhs) prev a.rhs
+      else never
+  in appHelper g app
+
+-- Complexity (I think): O(|V|*|F|), as we visit each node exactly once and each
+-- time potentially perform a graph union operation, which we assume has
+-- complexity O(|F|). V is the set of nodes in the AST and F is the set of nodes
+-- in the call graph (i.e. set of functions in the AST).
+lang Ast2CallGraph = LetAst + FunAst + RecLetsAst
+  sem toCallGraph =
+  | arg ->
+    let gempty = digraphAddVertex _callGraphTop (digraphEmpty _eqn eqsym) in
+    let g = digraphAddVertices (_findVertices arg) gempty in
+    _findEdges g _callGraphTop arg
+
+  sem _findVertices =
+  | TmLet t ->
+    let res_body = _handleLetVertex t _findVertices
+    in concat res_body (_findVertices t.inexpr)
+
+  | TmRecLets t ->
+    let res =
+      foldl (lam a. lam b. concat a (_handleLetVertex b _findVertices))
+            [] t.bindings
+    in concat res (_findVertices t.inexpr)
+
+  | tm ->
+    sfold_Expr_Expr concat [] (smap_Expr_Expr _findVertices tm)
+
+  sem _findEdges (cg : CallGraph) (prev : Name) =
+  | TmLet ({body = TmApp a} & t) ->
+    let id = _getSym t.ident in
+    let resBody = _handleApps id _findEdges prev cg t.body in
+    _findEdges resBody prev t.inexpr
+
+  | TmLet ({body = TmLam lm} & t) ->
+    let resBody = _findEdges cg t.ident lm.body in
+    _findEdges resBody prev t.inexpr
+
+  | TmRecLets t ->
+    let res =
+      foldl (lam g. lam b. digraphUnion g (_handleLetEdge b _findEdges g prev))
+            cg t.bindings
+    in _findEdges res prev t.inexpr
+
+  | tm ->
+    sfold_Expr_Expr digraphUnion cg (smap_Expr_Expr (_findEdges cg prev) tm)
+end
+
 
 let _projName = nameSym "x"
 let _head = lam s. get_ s (int_ 0)
@@ -34,11 +128,6 @@ let _eqn = lam n1. lam n2.
     nameEqSym n1 n2
   else
     error "Name without symbol."
-
-let _getSym = lam n.
-  (optionGetOrElse
-    (lam _. error "Expected symbol")
-    (nameGetSym n))
 
 let _nameHash = lam n.
   sym2hash (_getSym n)
@@ -83,112 +172,128 @@ let hole_ = use HoleAst in
   lam startGuess. lam depth.
   TmHole {startGuess = startGuess, depth = depth}
 
--- Create a call graph from an AST.
--- * Vertices (identifier names) are functions f defined as: let f = lam. ...
--- * There is an edge between f1 and f2 iff f1 calls f2: let f1 = lam. ... (f2 a)
--- * "top" is the top of the graph (i.e., no incoming edges)
+------------------------------
+-- Call context information --
+------------------------------
 
-type CallGraph = DiGraph Name Symbol
+-- Maintains call context information necessary for program transformations.
+-- This information is static and is thus computed once for each program.
+type CallCtxInfo = {
 
-let _handleLetVertex = use FunAst in
-  lam letexpr. lam f.
-    match letexpr.body with TmLam lm
-    then cons letexpr.ident (f lm.body)
-    else f letexpr.body
-
-let _handleLetEdge = use FunAst in
-  lam letexpr. lam f. lam g. lam prev.
-    match letexpr.body with TmLam lm
-    then f g letexpr.ident lm.body
-    else f g prev letexpr.body
-
-let _handleApps = use AppAst in use VarAst in
-  lam id. lam f. lam prev. lam g. lam app.
-    recursive let appHelper = lam g. lam app.
-      match app with TmApp {lhs = TmVar v, rhs = rhs} then
-        let resLhs =
-          if digraphHasVertex v.ident g then
-            digraphAddEdge prev v.ident id g
-          else g
-        in f resLhs prev rhs
-      else match app with TmApp ({lhs = TmApp a, rhs = rhs}) then
-        let resLhs = appHelper g (TmApp a) in
-        f resLhs prev rhs
-      else match app with TmApp a then
-        f (f g prev a.lhs) prev a.rhs
-      else never
-  in appHelper g app
-
--- Complexity (I think): O(|V|*|F|), as we visit each node exactly once and each
--- time potentially perform a graph union operation, which we assume has
--- complexity O(|F|). V is the set of nodes in the AST and F is the set of nodes
--- in the call graph (i.e. set of functions in the AST).
-lang Ast2CallGraph = LetAst + FunAst + RecLetsAst
-  sem toCallGraph =
-  | arg ->
-    let gempty = digraphAddVertex _top (digraphEmpty _eqn eqsym) in
-    let g = digraphAddVertices (_findVertices arg) gempty in
-    _findEdges g _top arg
-
-  sem _findVertices =
-  | TmLet t ->
-    let res_body = _handleLetVertex t _findVertices
-    in concat res_body (_findVertices t.inexpr)
-
-  | TmRecLets t ->
-    let res =
-      foldl (lam a. lam b. concat a (_handleLetVertex b _findVertices))
-            [] t.bindings
-    in concat res (_findVertices t.inexpr)
-
-  | tm ->
-    sfold_Expr_Expr concat [] (smap_Expr_Expr _findVertices tm)
-
-  sem _findEdges (cg : CallGraph) (prev : Name) =
-  | TmLet ({body = TmApp a} & t) ->
-    let id = _getSym t.ident in
-    let resBody = _handleApps id _findEdges prev cg t.body in
-    _findEdges resBody prev t.inexpr
-
-  | TmLet ({body = TmLam lm} & t) ->
-    let resBody = _findEdges cg t.ident lm.body in
-    _findEdges resBody prev t.inexpr
-
-  | TmRecLets t ->
-    let res =
-      foldl (lam g. lam b. digraphUnion g (_handleLetEdge b _findEdges g prev))
-            cg t.bindings
-    in _findEdges res prev t.inexpr
-
-  | tm ->
-    sfold_Expr_Expr digraphUnion cg (smap_Expr_Expr (_findEdges cg prev) tm)
-end
-
--- Type of context dependent information needed in transformations
-type ContextInfo = {
-
-  -- Call graph of the program.
+  -- Call graph of the program. Functions are nodes, function calls are edges.
   callGraph: DiGraph Name Symbol,
 
   -- Maps names of functions to the name of its incoming variable. The incoming
-  -- variables are used to keep track of the execution path.
+  -- variables keep track of the execution path during runtime.
   fun2inc: Hashmap Name Name,
 
   -- Maps edge labels in the call graph to the incoming variable name of its
   -- from-node.
   lbl2inc: Hashmap Symbol Name,
 
+  -- Each node in the call graph assigns a per-node unique integer to each
+  -- incoming edge. This map maps an edge symbol to the count value of its
+  -- destination node.
+  lbl2count: Hashmap Symbol Int,
+
   -- List of public functions in the program.
   publicFns: [Name]
 
 }
 
+-- Initialise the call context info from a program.
+let callCtxInit : [Name] -> CallGraph Name Symbol -> Expr -> CallCtxInfo =
+  lam publicFns. lam callGraph. lam tm.
+    let fun2inc =
+      foldl (lam acc. lam funName.
+               let incVarName = nameSym (concat "inc_" (nameGetStr funName)) in
+               hashmapInsert {eq = nameEq, hashfn = _nameHash}
+                 funName incVarName acc)
+            hashmapEmpty
+            (digraphVertices callGraph)
+    in
+    let lbl2inc =
+      foldl (lam acc. lam edge.
+               match edge with (fromVtx, _, lbl) then
+                 let incVarName =
+                   optionGetOrElse (lam _. error "Internal error: lookup failed")
+                     (hashmapLookup {eq = nameEq, hashfn = _nameHash}
+                        fromVtx fun2inc)
+                 in hashmapInsert {eq = eqsym, hashfn = sym2hash}
+                      lbl incVarName acc
+               else never)
+            hashmapEmpty
+            (digraphEdges callGraph)
+    in
+    let lbl2count =
+      foldl (lam acc. lam funName.
+               let incomingEdges = digraphEdgesTo funName callGraph in
+               match foldl (lam acc. lam e.
+                              match e with (_, _, lbl) then
+                                match acc with (hm, i) then
+                                  (hashmapInsert {eq = eqsym, hashfn = sym2hash}
+                                     lbl i hm,
+                                   addi i 1)
+                                else never
+                              else never)
+                           (acc, 1)
+                           incomingEdges
+               with (hm, _) then hm
+               else never)
+            hashmapEmpty
+            (digraphVertices callGraph)
+  in
+  { callGraph = callGraph, fun2inc = fun2inc, lbl2inc = lbl2inc,
+    lbl2count = lbl2count, publicFns = publicFns }
+
+-- Returns the binding of a function name, or None () if the name is not a node
+-- in the call graph.
+let callCtxFunLookup : Name -> CallCtxInfo -> Option Name = lam name. lam info.
+  match info with { fun2inc = fun2inc } then
+    hashmapLookup {eq = nameEq, hashfn = _nameHash} name fun2inc
+  else never
+
+-- Get the incoming variable name of a function, giving an error if the function
+-- name is not part of the call graph.
+let callCtxFun2Inc : Name -> CallCtxInfo -> Name = lam name. lam info.
+  optionGetOrElse (lam _. error "fun2inc lookup failed")
+                  (callCtxFunLookup name info)
+
+-- Get the incoming variable name of an edge label, giving an error if the edge
+-- is not part of the call graph.
+let callCtxLbl2Inc : Symbol -> CallCtxInfo -> Name = lam lbl. lam info.
+  match info with { lbl2inc = lbl2inc } then
+    optionGetOrElse (lam _. error "lbl2inc lookup failed")
+                    (hashmapLookup {eq = eqsym, hashfn = sym2hash}
+                                   lbl lbl2inc)
+  else never
+
+-- Get the count of an edge label, giving an error if the edge is not part of
+-- the call graph.
+let callCtxLbl2Count : Symbol -> CallCtxInfo -> Int = lam lbl. lam info.
+  match info with { lbl2count = lbl2count } then
+    optionGetOrElse (lam _. error "lbl2count lookup failed")
+                    (hashmapLookup {eq = eqsym, hashfn = sym2hash}
+                                   lbl lbl2count)
+  else never
+
+-- Get all the incoming variable names of the program.
+let callCtxIncVarNames : CallCtxInfo -> [Name] = lam info.
+  match info with { fun2inc = fun2inc } then
+    hashmapValues {eq = nameEq, hashfn = _nameHash} fun2inc
+  else never
+
+-----------------------------
+-- Program transformations --
+-----------------------------
+
 -- Type of a function for looking up decision points assignments
+-- TODO: What is the best interface for Lookup?
 type Lookup = Symbol -> [Symbol] -> Expr
 type Skeleton = Lookup -> Expr
 
 -- The initial value of an incoming variable
-let _incomingUndef = gensym ()
+let _incUndef = 0
 
 -- Get the leftmost node (callee function) in a (nested) application node.
 -- Returns an optional: either the name of the variable if the leftmost node is
@@ -198,14 +303,14 @@ let _nestedAppGetCallee = use AppAst in use VarAst in lam tm.
     match app with TmApp {lhs = TmVar v, rhs = rhs} then
       Some v.ident
     else match app with TmApp {lhs = TmApp a} then
-        work (TmApp a)
+      work (TmApp a)
     else None ()
   in work tm
 
 -- Generate skeleton code for looking up a value of a decision point depending
 -- on its call history
 -- TODO: handle public function
-let _lookupCallCtx : Lookup -> Symbol -> Name -> ContextInfo -> [[Symbol]] -> Skeleton =
+let _lookupCallCtx : Lookup -> Symbol -> Name -> CallCtxInfo -> [[Symbol]] -> Skeleton =
   use MatchAst in use NeverAst in
     lam lookup. lam holeId. lam incVarName. lam info. lam paths.
       match info with { lbl2inc = lbl2inc } then
@@ -228,11 +333,10 @@ let _lookupCallCtx : Lookup -> Symbol -> Name -> ContextInfo -> [[Symbol]] -> Sk
             match partitionPaths nonEmpty with (startVals, partition) then
               let branches =
                 mapi (lam i. lam s.
-                        match hashmapLookup {eq = eqsym, hashfn = sym2hash} s lbl2inc
-                        with Some iv then
-                          matchex_ (eqsym_ (deref_ (nvar_ incVarName)) (symb_ s)) (ptrue_)
-                                   (work iv (map tail (get partition i)) (cons s acc))
-                        else error "Internal error: lookup failed")
+                        let iv = callCtxLbl2Inc s info in
+                        let count = callCtxLbl2Count s info in
+                        matchex_ (deref_ (nvar_ incVarName)) (pint_ count)
+                                 (work iv (map tail (get partition i)) (cons s acc)))
                      startVals
               in
               let defaultVal =
@@ -249,34 +353,6 @@ let _lookupCallCtx : Lookup -> Symbol -> Name -> ContextInfo -> [[Symbol]] -> Sk
 lang ContextAwareHoles = Ast2CallGraph + HoleAst + IntAst + SymbAst + MatchAst + NeverAst
                          -- Included for debugging
                          + MExprPrettyPrint
-
-  -- Initialise context information
-  sem _initContextInfo (publicFns : [Name]) =
-  | tm ->
-    let callGraph = toCallGraph tm in
-    let fun2inc =
-      foldl (lam acc. lam funName.
-               let incVarName = nameSym (concat "inc" (nameGetStr funName)) in
-               hashmapInsert {eq = nameEq, hashfn = _nameHash}
-                 funName incVarName acc)
-            hashmapEmpty
-            (digraphVertices callGraph)
-    in
-    let lbl2inc =
-      foldl (lam acc. lam edge.
-               match edge with (fromVtx, _, lbl) then
-                 let incVarName =
-                   optionGetOrElse (lam _. error "Internal error: lookup failed")
-                     (hashmapLookup {eq = nameEq, hashfn = _nameHash}
-                        fromVtx fun2inc)
-                 in hashmapInsert {eq = eqsym, hashfn = sym2hash}
-                      lbl incVarName acc
-               else never)
-            hashmapEmpty
-            (digraphEdges callGraph)
-    in
-
-  {callGraph = callGraph, fun2inc = fun2inc, lbl2inc = lbl2inc, publicFns = publicFns}
 
   -- Find the initial mapping from decision points to values
   -- Returns a function of type 'Lookup'.
@@ -303,85 +379,75 @@ lang ContextAwareHoles = Ast2CallGraph + HoleAst + IntAst + SymbAst + MatchAst +
         (lam _. error "Lookup failed")
         (hashmapLookup {eq = eqsym, hashfn = sym2hash} id m)
 
-  -- Transform a program with decision points.
-  -- Returns a function of type 'Skeleton'. Applying this function to a lookup
-  -- function yields an MExpr program where the values of the decision points
-  -- have been replaced by values given by the lookup function.
+  -- Transform a program with decision points. Returns a function of type
+  -- 'Skeleton'. Applying this function to a lookup function yields an MExpr
+  -- program where the values of the decision points have been statically
+  -- replaced by values given by the lookup function.
   sem transform (publicFns : [Name]) =
   | tm ->
-    let info = _initContextInfo publicFns tm in
+    let info = callCtxInit publicFns (toCallGraph tm) tm in
     -- Declare the incoming variables
     let incVars =
-      bindall_ (map (lam incVarName. nulet_ incVarName (ref_ (symb_ _incomingUndef)))
-                    (hashmapValues {eq = nameEq, hashfn = _nameHash} info.fun2inc))
+      bindall_ (map (lam incVarName. nulet_ incVarName (ref_ (int_ _incUndef)))
+                    (callCtxIncVarNames info))
     in
     let tm = bind_ incVars tm in
-    lam lookup. _maintainCallCtx lookup info _top tm
+    lam lookup. _maintainCallCtx lookup info _callGraphTop tm
 
     -- Update incoming variables appropriately for function calls
-    sem _maintainCallCtx (lookup : Lookup) (info : ContextInfo) (cur : Name) =
+    sem _maintainCallCtx (lookup : Lookup) (info : CallCtxInfo) (cur : Name) =
     -- Application: caller updates incoming variable of callee
     | TmLet ({ body = TmApp a } & t) ->
-      match info with { fun2inc = fun2inc } then
-        -- NOTE(Linnea, 2021-01-29): ANF form means no recursion necessary for an
-        -- application node (cannot contain function definitions or calls)
-        -- TODO: Double check above
-        let le = TmLet {t with inexpr = _maintainCallCtx lookup info cur t.inexpr} in
-        match _nestedAppGetCallee (TmApp a) with Some callee then
-          match hashmapLookup {eq = nameEq, hashfn = _nameHash} callee fun2inc
-          with Some iv then
-            -- Set the incoming var of callee to current node
-            let update = modref_ (nvar_ iv) (symb_ (_getSym t.ident)) in
-            bind_
-              (nulet_ (nameSym "_") update) le
-          else le
+      -- NOTE(Linnea, 2021-01-29): ANF form means no recursion necessary for an
+      -- application node (cannot contain function definitions or calls)
+      -- TODO: Double check above
+      let le = TmLet {t with inexpr = _maintainCallCtx lookup info cur t.inexpr} in
+      match _nestedAppGetCallee (TmApp a) with Some callee then
+        match callCtxFunLookup callee info
+        with Some iv then
+          -- Set the incoming var of callee to current node
+          let count = callCtxLbl2Count (_getSym t.ident) info in
+          let update = modref_ (nvar_ iv) (int_ count) in
+          bind_
+            (nulet_ (nameSym "_") update) le
         else le
-      else never
+      else le
 
     -- Decision point: lookup the value depending on calling context
     | TmLet ({ body = TmHole { depth = depth }, ident = ident} & t) ->
        match info with
-        { callGraph = callGraph, publicFns = publicFns, fun2inc = fun2inc }
+        { callGraph = callGraph, publicFns = publicFns }
        then
          let paths = eqPaths callGraph cur depth publicFns in
-         match hashmapLookup {eq = nameEq, hashfn = _nameHash} cur fun2inc
-         with Some iv then
-           let id = _getSym ident in
-           let lookup = _lookupCallCtx lookup id iv info paths in
-           -- let _ = dprint lookup in
-           -- let _ = printLn (concat "\n\nLookup code:\n" (expr2str lookup)) in
-           TmLet {{t with body = lookup}
-                  with inexpr = _maintainCallCtx lookup info cur t.inexpr}
-         else error "Decision point must be defined within a named function"
+         let iv = callCtxFun2Inc cur info in
+         let id = _getSym ident in
+         let lookup = _lookupCallCtx lookup id iv info paths in
+         TmLet {{t with body = lookup}
+                   with inexpr = _maintainCallCtx lookup info cur t.inexpr}
        else never
 
     -- Function definitions: possibly update cur inside body of function
     | TmLet ({ body = TmLam lm } & t) ->
-      match info with { fun2inc = fun2inc } then
-        let curBody =
-          if hashmapMem {eq = nameEq, hashfn = _nameHash} t.ident fun2inc
-          then t.ident
-          else cur
-       in TmLet {{t with body = _maintainCallCtx lookup info curBody t.body}
-                  with inexpr = _maintainCallCtx lookup info cur t.inexpr}
-     else never
+      let curBody =
+        match callCtxFunLookup t.ident info with Some _
+        then t.ident
+        else cur
+      in TmLet {{t with body = _maintainCallCtx lookup info curBody t.body}
+                   with inexpr = _maintainCallCtx lookup info cur t.inexpr}
 
     | TmRecLets ({ bindings = bindings, inexpr = inexpr } & t) ->
-      match info with { fun2inc = fun2inc } then
-        let newBinds =
-          map (lam bind.
-                 match bind with { body = TmLam lm } then
-                   let curBody =
-                     if hashmapMem {eq = nameEq, hashfn = _nameHash}
-                             bind.ident fun2inc
-                     then bind.ident
-                     else cur
-                   in {bind with body = _maintainCallCtx lookup info curBody bind.body}
-                 else {bind with body = _maintainCallCtx lookup info cur bind.body})
-          bindings
-        in TmRecLets {{t with bindings = newBinds}
+      let newBinds =
+        map (lam bind.
+               match bind with { body = TmLam lm } then
+                 let curBody =
+                   match callCtxFunLookup bind.ident info with Some _
+                   then bind.ident
+                   else cur
+                 in {bind with body = _maintainCallCtx lookup info curBody bind.body}
+               else {bind with body = _maintainCallCtx lookup info cur bind.body})
+        bindings
+      in TmRecLets {{t with bindings = newBinds}
                        with inexpr = _maintainCallCtx lookup info cur inexpr}
-      else never
     | tm ->
       smap_Expr_Expr (_maintainCallCtx lookup info cur) tm
 end
