@@ -554,6 +554,10 @@ lang CmpIntPrettyPrint = CmpIntAst + ConstPrettyPrint
   sem getConstStringCode (indent : Int) =
   | CEqi _ -> "eqi"
   | CLti _ -> "lti"
+  | CNeqi _ -> "neqi"
+  | CGti _ -> "gti"
+  | CLeqi _ -> "leqi"
+  | CGeqi _ -> "geqi"
 end
 
 lang CmpFloatPrettyPrint = CmpFloatAst + ConstPrettyPrint
