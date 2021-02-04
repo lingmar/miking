@@ -409,8 +409,8 @@ lang ContextAwareHoles = Ast2CallGraph + HoleAst + IntAst + MatchAst + NeverAst
        then
          let paths = eqPaths callGraph cur depth publicFns in
          let iv = callCtxFun2Inc cur info in
-         let lookup = _lookupCallCtx lookup ident iv info paths in
-         TmLet {{t with body = lookup}
+         let lookupCode = _lookupCallCtx lookup ident iv info paths in
+         TmLet {{t with body = lookupCode}
                    with inexpr = _maintainCallCtx lookup info cur t.inexpr}
        else never
 
@@ -468,25 +468,25 @@ let pprint = lam ast.
   (skel lookup)
 in
 
-let ast = (bindall_ [  (nureclets_add funA (ulam_ "x" (bind_ (ulet_ "h" (hole_ true_ 2))
-                                                    (if_ (var_ "h")
-                                                         (app_ (nvar_ funB) (addi_ (var_ "x") (int_ 1)))
-                                                         (app_ (nvar_ funA) (int_ 1)))))
-                       (nureclets_add funB (ulam_ "x" (if_ (geqi_ (var_ "x") (int_ 5))
-                                                           (var_ "x")
-                                                           (app_ (nvar_ funA) (addi_ (var_ "x") (int_ 1)))))
-                       reclets_empty))
-                     , nulet_ funC (ulam_ "x" (ulam_ "y" (if_ (var_ "x")
-                                                              (app_ (nvar_ funA) (int_ 0))
-                                                              (app_ (nvar_ funA) (var_ "y")))))
-                     , nulet_ funD (ulam_ "x" (appf2_ (nvar_ funC) (var_ "x") (int_ 2)))
-                     , ulet_ "a" (appf2_ (nvar_ funC) true_ (int_ 0))
-                     , ulet_ "b" (appf2_ (nvar_ funC) false_ (int_ 1))
-                     , ulet_ "c" (app_ (nvar_ funD) true_)
-                     , ulet_ "d" (app_ (nvar_ funD) false_)
-                     , tuple_ [(var_ "a"), (var_ "b"), (var_ "c"), (var_ "d")]
-                     ])
-in
+let ast = (bindall_
+  [  (nureclets_add funA (ulam_ "x" (bind_ (ulet_ "h" (hole_ true_ 2))
+                                  (if_ (var_ "h")
+                                       (app_ (nvar_ funB) (addi_ (var_ "x") (int_ 1)))
+                                       (app_ (nvar_ funA) (int_ 1)))))
+     (nureclets_add funB (ulam_ "x" (if_ (geqi_ (var_ "x") (int_ 5))
+                                         (var_ "x")
+                                         (app_ (nvar_ funA) (addi_ (var_ "x") (int_ 1)))))
+     reclets_empty))
+   , nulet_ funC (ulam_ "x" (ulam_ "y" (if_ (var_ "x")
+                                            (app_ (nvar_ funA) (int_ 0))
+                                            (app_ (nvar_ funA) (var_ "y")))))
+   , nulet_ funD (ulam_ "x" (appf2_ (nvar_ funC) (var_ "x") (int_ 2)))
+   , ulet_ "a" (appf2_ (nvar_ funC) true_ (int_ 0))
+   , ulet_ "b" (appf2_ (nvar_ funC) false_ (int_ 1))
+   , ulet_ "c" (app_ (nvar_ funD) true_)
+   , ulet_ "d" (app_ (nvar_ funD) false_)
+   , tuple_ [(var_ "a"), (var_ "b"), (var_ "c"), (var_ "d")]
+  ]) in
 -- let prog = pprint ast in
 --let res = eval { env = [] } prog in
 --let _ = dprint res in
@@ -504,59 +504,81 @@ in
 -- in
 -- let funC = lam x. funB x false
 -- in ()
-let ast = bindall_ [  nulet_ funA (ulam_ "_" (bind_ (ulet_ "h" (hole_ (int_ 0) 2))
-                                                    (var_ "h")))
-                    , nureclets_add funB (ulam_ "x" (ulam_ "y" (if_ (var_ "x")
-                                                                    (if_ (var_ "y")
-                                                                         (appf2_ (nvar_ funB) true_ false_)
-                                                                         (app_ (nvar_ funA) (var_ "x")))
-                                                                    (app_ (nvar_ funA) (var_ "y")))))
-                                         reclets_empty
-                    , nulet_ funC (ulam_ "x" (appf2_ (nvar_ funB) (var_ "x") false_))
+let ast = bindall_ [  nulet_ funA (ulam_ "_"
+                        (bind_ (ulet_ "h" (hole_ (int_ 0) 2))
+                               (var_ "h")))
+                    , nureclets_add funB
+                        (ulam_ "x"
+                          (ulam_ "y" (if_ (var_ "x")
+                                          (if_ (var_ "y")
+                                               (appf2_ (nvar_ funB) true_ false_)
+                                               (app_ (nvar_ funA) (var_ "x")))
+                                          (app_ (nvar_ funA) (var_ "y")))))
+                        reclets_empty
+                    , nulet_ funC (ulam_ "x"
+                        (appf2_ (nvar_ funB) (var_ "x") false_))
                    ]
 in
 let _ = pprint ast in
 let ast = anf ast in
 let cg = toCallGraph ast in
-let edgeSymCB =
+let edgeCB =
   match digraphEdgesBetween funC funB cg with [(_,_,sym)]
   then sym else error "Expected one edge"
 in
-let edgeSymsBA =
+let edgesBA =
   match digraphEdgesBetween funB funA cg with [(_,_,s1), (_,_,s2)]
   then [s1, s2] else error "Expected two edges"
 in
-let edgeSymBA1 = head edgeSymsBA in
-let edgeSymBA2 = last edgeSymsBA in
-let edgeSymBB =
+let edgeBA1 = head edgesBA in
+let edgeBA2 = last edgesBA in
+let edgeBB =
   match digraphEdgesBetween funB funB cg with [(_,_,sym)]
   then sym else error "Expected one edge"
 in
 
-let eqSymPath = setEqual _eqn in
+let eqNameSeq = setEqual _eqn in
 
 let lookup = lam _. lam path.
-  match      eqSymPath path [edgeSymCB, edgeSymBA1] with true then int_ 1
-  else match eqSymPath path [edgeSymCB, edgeSymBA2] with true then int_ 2
-  else match eqSymPath path [edgeSymBB, edgeSymBA1] with true then int_ 3
-  else match eqSymPath path [edgeSymBB, edgeSymBA2] with true then int_ 4
-  else match eqSymPath path [edgeSymBA1]            with true then int_ 5
-  else match eqSymPath path [edgeSymBA2]            with true then int_ 6
+  match      eqNameSeq path [edgeCB, edgeBA1] with true then int_ 1
+  else match eqNameSeq path [edgeCB, edgeBA2] with true then int_ 2
+  else match eqNameSeq path [edgeBB, edgeBA1] with true then int_ 3
+  else match eqNameSeq path [edgeBB, edgeBA2] with true then int_ 4
+  else match eqNameSeq path [edgeBA1]            with true then int_ 5
+  else match eqNameSeq path [edgeBA2]            with true then int_ 6
   else error "Unknown path"
 in
 
-let append = lam ast. lam suffix.
+let appendToAst = lam ast. lam suffix.
   let ast = bind_ ast suffix in
   let skel = transform [funC, funB] ast in
   skel lookup
 in
 
-utest eval { env = [] } (append ast (app_ (nvar_ funC) true_))  with int_ 1 in
-utest eval { env = [] } (append ast (app_ (nvar_ funC) false_)) with int_ 2 in
-utest eval { env = [] } (append ast (appf2_ (nvar_ funB) true_ true_)) with int_ 3 in
-utest eval { env = [] } (append ast (appf2_ (nvar_ funB) true_ false_)) with int_ 5 in
-utest eval { env = [] } (append ast (appf2_ (nvar_ funB) false_ false_)) with int_ 6 in
+utest eval { env = [] } (appendToAst ast
+  (app_ (nvar_ funC) true_)
+) with int_ 1 in
 
+utest eval { env = [] } (appendToAst ast
+  (app_ (nvar_ funC) false_)
+) with int_ 2 in
+
+utest eval { env = [] } (appendToAst ast
+  (appf2_ (nvar_ funB) true_ true_)
+) with int_ 3 in
+
+utest eval { env = [] } (appendToAst ast
+  (appf2_ (nvar_ funB) true_ false_)
+) with int_ 5 in
+
+utest eval { env = [] } (appendToAst ast
+  (appf2_ (nvar_ funB) false_ false_)
+) with int_ 6 in
+
+utest eval { env = [] } (appendToAst ast
+  (bind_ (nulet_ (nameSym "_") (app_ (nvar_ funC) false_))
+         (appf2_ (nvar_ funB) false_ false_))
+) with int_ 6 in
 
 -- let s1 = gensym () in
 -- let x = nameSetSym (nameNoSym "x") s1 in
