@@ -15,6 +15,7 @@ include "hashmap.mc"
 -- Enable debugging of symbols in pprint?
 -- Represent paths as trees?
 -- Handle public functions: make dummy nodes and match in lookup
+   -- Create the call graph AFTER sentry transformation?
 
 let _getSym = lam n.
   optionGetOrElse
@@ -187,7 +188,10 @@ type CallCtxInfo = {
   lbl2count: Hashmap Name Int,
 
   -- List of public functions in the program.
-  publicFns: [Name]
+  publicFns: [Name],
+
+  -- Maps names of public functions to their internal nodes.
+  pub2internal: Hashmap Name Name
 
 }
 
@@ -232,9 +236,16 @@ let callCtxInit : [Name] -> CallGraph Name Name -> Expr -> CallCtxInfo =
                else never)
             hashmapEmpty
             (digraphVertices callGraph)
+    in
+    let pub2internal =
+      foldl (lam acc. lam funName.
+               let internalFunName = nameSym (concat "_" (nameGetStr funName)) in
+               hashmapInsert {eq = _eqn, hashfn = _nameHash}
+                 funName internalFunName acc)
+            hashmapEmpty publicFns
   in
   { callGraph = callGraph, fun2inc = fun2inc, lbl2inc = lbl2inc,
-    lbl2count = lbl2count, publicFns = publicFns }
+    lbl2count = lbl2count, publicFns = publicFns, pub2internal = pub2internal }
 
 -- Returns the binding of a function name, or None () if the name is not a node
 -- in the call graph.
@@ -273,6 +284,12 @@ let callCtxIncVarNames : CallCtxInfo -> [Name] = lam info.
     hashmapValues {eq = _eqn, hashfn = _nameHash} fun2inc
   else never
 
+-- Lookup the internal name of a public function.
+let callCtxPubLookup : Name -> CallCtxInfo -> Option Name = lam name. lam info.
+  match info with { pub2internal = pub2internal } then
+    hashmapLookup {eq = _eqn, hashfn = _nameHash} name pub2internal
+  else never
+
 -----------------------------
 -- Program transformations --
 -----------------------------
@@ -285,17 +302,30 @@ type Skeleton = Lookup -> Expr
 -- The initial value of an incoming variable
 let _incUndef = 0
 
+
+
 -- Get the leftmost node (callee function) in a (nested) application node.
 -- Returns an optional: either the name of the variable if the leftmost node is
 -- a node, otherwise None ().
 let _nestedAppGetCallee = use AppAst in use VarAst in lam tm.
   recursive let work = lam app.
-    match app with TmApp {lhs = TmVar v, rhs = rhs} then
+    match app with TmApp {lhs = TmVar v} then
       Some v.ident
     else match app with TmApp {lhs = TmApp a} then
       work (TmApp a)
     else None ()
   in work tm
+
+let _nestedAppSetCallee : Expr -> Name -> Expr = use AppAst in use VarAst in
+  lam tm. lam callee.
+    recursive let work : Expr -> Expr = lam app.
+      match app with TmApp ({lhs = TmVar v} & a) then
+        TmApp {a with lhs = TmVar {v with ident = callee}}
+      else match app with TmApp {lhs = TmApp a} then
+        work (TmApp a)
+      else error "Expected a nested application node"
+    in work tm
+
 
 -- Generate skeleton code for looking up a value of a decision point depending
 -- on its call history
@@ -368,6 +398,7 @@ lang ContextAwareHoles = Ast2CallGraph + HoleAst + IntAst + MatchAst + NeverAst
         (lam _. error "Lookup failed")
         (hashmapLookup {eq = _eqn, hashfn = _nameHash} id m)
 
+
   -- Transform a program with decision points. Returns a function of type
   -- 'Skeleton'. Applying this function to a lookup function yields an MExpr
   -- program where the values of the decision points have been statically
@@ -383,61 +414,77 @@ lang ContextAwareHoles = Ast2CallGraph + HoleAst + IntAst + MatchAst + NeverAst
     let tm = bind_ incVars tm in
     lam lookup. _maintainCallCtx lookup info _callGraphTop tm
 
-    -- Update incoming variables appropriately for function calls
-    sem _maintainCallCtx (lookup : Lookup) (info : CallCtxInfo) (cur : Name) =
-    -- Application: caller updates incoming variable of callee
-    | TmLet ({ body = TmApp a } & t) ->
-      -- NOTE(Linnea, 2021-01-29): ANF form means no recursion necessary for an
-      -- application node (cannot contain function definitions or calls)
-      -- TODO: Double check above
-      let le = TmLet {t with inexpr = _maintainCallCtx lookup info cur t.inexpr} in
-      match _nestedAppGetCallee (TmApp a) with Some callee then
-        match callCtxFunLookup callee info
-        with Some iv then
-          -- Set the incoming var of callee to current node
-          let count = callCtxLbl2Count t.ident info in
-          let update = modref_ (nvar_ iv) (int_ count) in
-          bind_
-            (nulet_ (nameSym "_") update) le
-        else le
+  sem _placeSentries (info : CallCtxInfo) =
+  | TmLet ({ body = TmApp a } & t) ->
+    match _nestedAppGetCallee (TmApp a) with Some callee then
+      match callCtxPubLookup callee info with Some internal then
+        TmLet {{t with body = _nestedAppSetCallee (TmApp a) internal}
+                  with inexpr = _placeSentries t.inexpr}
+      else TmLet {t with inexpr = _placeSentries t.inexpr}
+    else TmLet {t with inexpr = _placeSentries t.inexpr}
+
+  -- | TmLet ({ body = TmLam lm } & t) ->
+  --   match callCtxPubLookup lm.ident info with Some internal then
+  --     -- replace body with call to internal function (in ANF)
+  --     -- inexpr with let _<fun> = lam. (whatever was in <fun>)
+  --   else
+  | tm -> smap_Expr_Expr (_placeSentries info) tm
+
+  -- Update incoming variables appropriately for function calls
+  sem _maintainCallCtx (lookup : Lookup) (info : CallCtxInfo) (cur : Name) =
+  -- Application: caller updates incoming variable of callee
+  | TmLet ({ body = TmApp a } & t) ->
+    -- NOTE(Linnea, 2021-01-29): ANF form means no recursion necessary for an
+    -- application node (cannot contain function definitions or calls)
+    -- TODO: Double check above
+    let le = TmLet {t with inexpr = _maintainCallCtx lookup info cur t.inexpr} in
+    match _nestedAppGetCallee (TmApp a) with Some callee then
+      match callCtxFunLookup callee info
+      with Some iv then
+        -- Set the incoming var of callee to current node
+        let count = callCtxLbl2Count t.ident info in
+        let update = modref_ (nvar_ iv) (int_ count) in
+        bind_
+          (nulet_ (nameSym "_") update) le
       else le
+    else le
 
-    -- Decision point: lookup the value depending on calling context
-    | TmLet ({ body = TmHole { depth = depth }, ident = ident} & t) ->
-       match info with
-        { callGraph = callGraph, publicFns = publicFns }
-       then
-         let paths = eqPaths callGraph cur depth publicFns in
-         let iv = callCtxFun2Inc cur info in
-         let lookupCode = _lookupCallCtx lookup ident iv info paths in
-         TmLet {{t with body = lookupCode}
-                   with inexpr = _maintainCallCtx lookup info cur t.inexpr}
-       else never
+  -- Decision point: lookup the value depending on calling context
+  | TmLet ({ body = TmHole { depth = depth }, ident = ident} & t) ->
+     match info with
+      { callGraph = callGraph, publicFns = publicFns }
+     then
+       let paths = eqPaths callGraph cur depth publicFns in
+       let iv = callCtxFun2Inc cur info in
+       let lookupCode = _lookupCallCtx lookup ident iv info paths in
+       TmLet {{t with body = lookupCode}
+                 with inexpr = _maintainCallCtx lookup info cur t.inexpr}
+     else never
 
-    -- Function definitions: possibly update cur inside body of function
-    | TmLet ({ body = TmLam lm } & t) ->
-      let curBody =
-        match callCtxFunLookup t.ident info with Some _
-        then t.ident
-        else cur
-      in TmLet {{t with body = _maintainCallCtx lookup info curBody t.body}
-                   with inexpr = _maintainCallCtx lookup info cur t.inexpr}
+  -- Function definitions: possibly update cur inside body of function
+  | TmLet ({ body = TmLam lm } & t) ->
+    let curBody =
+      match callCtxFunLookup t.ident info with Some _
+      then t.ident
+      else cur
+    in TmLet {{t with body = _maintainCallCtx lookup info curBody t.body}
+                 with inexpr = _maintainCallCtx lookup info cur t.inexpr}
 
-    | TmRecLets ({ bindings = bindings, inexpr = inexpr } & t) ->
-      let newBinds =
-        map (lam bind.
-               match bind with { body = TmLam lm } then
-                 let curBody =
-                   match callCtxFunLookup bind.ident info with Some _
-                   then bind.ident
-                   else cur
-                 in {bind with body = _maintainCallCtx lookup info curBody bind.body}
-               else {bind with body = _maintainCallCtx lookup info cur bind.body})
-        bindings
-      in TmRecLets {{t with bindings = newBinds}
-                       with inexpr = _maintainCallCtx lookup info cur inexpr}
-    | tm ->
-      smap_Expr_Expr (_maintainCallCtx lookup info cur) tm
+  | TmRecLets ({ bindings = bindings, inexpr = inexpr } & t) ->
+    let newBinds =
+      map (lam bind.
+             match bind with { body = TmLam lm } then
+               let curBody =
+                 match callCtxFunLookup bind.ident info with Some _
+                 then bind.ident
+                 else cur
+               in {bind with body = _maintainCallCtx lookup info curBody bind.body}
+             else {bind with body = _maintainCallCtx lookup info cur bind.body})
+      bindings
+    in TmRecLets {{t with bindings = newBinds}
+                     with inexpr = _maintainCallCtx lookup info cur inexpr}
+  | tm ->
+    smap_Expr_Expr (_maintainCallCtx lookup info cur) tm
 end
 
 lang PPrintLang = MExprPrettyPrint + HolePrettyPrint
@@ -544,8 +591,8 @@ let lookup = lam _. lam path.
   else match eqNameSeq path [edgeCB, edgeBA2] with true then int_ 2
   else match eqNameSeq path [edgeBB, edgeBA1] with true then int_ 3
   else match eqNameSeq path [edgeBB, edgeBA2] with true then int_ 4
-  else match eqNameSeq path [edgeBA1]            with true then int_ 5
-  else match eqNameSeq path [edgeBA2]            with true then int_ 6
+  else match eqNameSeq path [edgeBA1]         with true then int_ 5
+  else match eqNameSeq path [edgeBA2]         with true then int_ 6
   else error "Unknown path"
 in
 
