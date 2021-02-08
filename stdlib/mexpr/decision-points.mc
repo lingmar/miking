@@ -32,12 +32,12 @@ let _eqn = lam n1. lam n2.
 let _nameHash = lam n.
   sym2hash (_getSym n)
 
-let _initNameMap : [Name] -> (Name -> v) -> Hashmap Name v =
-  lam keys. lam f.
-    foldl (lam acc. lam k.
-             hashmapInsert {eq = _eqn, hashfn = _nameHash} k (f k) acc)
+let _nameMapInit : [a] -> (a -> Name) -> (a -> v) -> Hashmap Name v =
+  lam items. lam toKey. lam toVal.
+    foldl (lam acc. lam i.
+             hashmapInsert {eq = _eqn, hashfn = _nameHash} (toKey i) (toVal i) acc)
       hashmapEmpty
-      keys
+      items
 
 -------------------------
 -- Call graph creation --
@@ -176,11 +176,16 @@ let hole_ = use HoleAst in
 ------------------------------
 
 -- Maintains call context information necessary for program transformations.
--- This information is static and is thus computed once for each program.
+-- This information is static and is computed once for each program.
 type CallCtxInfo = {
 
   -- Call graph of the program. Functions are nodes, function calls are edges.
   callGraph: DiGraph Name Name,
+
+  -- List of public functions of the program (possible entry points in the call
+  -- graph)
+  publicFns: [Name],
+
 
   -- Maps names of functions to the name of its incoming variable. The incoming
   -- variables keep track of the execution path during runtime.
@@ -191,37 +196,32 @@ type CallCtxInfo = {
   lbl2inc: Hashmap Name Name,
 
   -- Each node in the call graph assigns a per-node unique integer to each
-  -- incoming edge. This map maps an edge symbol to the count value of its
-  -- destination node.
-  lbl2count: Hashmap Name Int,
-
-  publicFns: [Name]
+  -- incoming edge. This map maps an edge to the count value of its destination
+  -- node.
+  lbl2count: Hashmap Name Int
 
 }
+
+-- Create a new name from a prefix string and name.
+let _newNameFromStr : Str -> Name -> Name = lam prefix. lam name.
+  nameSym (concat prefix (nameGetStr name))
+-- Get the name of the incoming variable from a name.
+let _incVarFromName = _newNameFromStr "inc_"
 
 -- Compute the call context info from a program.
 let callCtxInit : [Name] -> CallGraph Name Name -> Expr -> CallCtxInfo =
   lam publicFns. lam callGraph. lam tm.
     let fun2inc =
-      foldl (lam acc. lam funName.
-               let incVarName = nameSym (concat "inc_" (nameGetStr funName)) in
-               hashmapInsert {eq = _eqn, hashfn = _nameHash}
-                 funName incVarName acc)
-            hashmapEmpty
-            (digraphVertices callGraph)
+      _nameMapInit (digraphVertices callGraph) identity _incVarFromName
     in
     let lbl2inc =
-      foldl (lam acc. lam edge.
-               match edge with (fromVtx, _, lbl) then
-                 let incVarName =
-                   optionGetOrElse (lam _. error "Internal error: lookup failed")
-                     (hashmapLookup {eq = _eqn, hashfn = _nameHash}
-                        fromVtx fun2inc)
-                 in hashmapInsert {eq = _eqn, hashfn = _nameHash}
-                      lbl incVarName acc
-               else never)
-            hashmapEmpty
-            (digraphEdges callGraph)
+      _nameMapInit (digraphEdges callGraph)
+        (lam e. match e with (_, _, lbl) then lbl else never)
+        (lam e.
+           match e with (from, _, _) then
+           optionGetOrElse (lam _. error "Internal error: lookup failed")
+             (hashmapLookup {eq = _eqn, hashfn = _nameHash} from fun2inc)
+           else never)
     in
     let lbl2count =
       foldl (lam acc. lam funName.
@@ -296,10 +296,12 @@ let callCtxPubLookup : Name -> CallCtxInfo -> Option Name = lam name. lam info.
 type Lookup = Name -> [Name] -> Expr
 type Skeleton = Lookup -> Expr
 
--- The initial value of an incoming variable
+-- The initial value of an incoming variable.
 let _incUndef = 0
-
-
+-- Get the name of a forwarding call variable from a name.
+let _fwdVarFromName = _newNameFromStr "fwd_"
+-- Get the name of a private function from a name.
+let _privFunFromName = _newNameFromStr "pri_"
 
 -- Get the leftmost node (callee function) in a nested application node. Returns
 -- optionally the variable name if the leftmost node is a variable, otherwise
@@ -399,6 +401,21 @@ let _lookupCallCtx : Lookup -> Name -> Name -> CallCtxInfo -> [[Name]] -> Skelet
         work incVarName (map reverse paths) []
       else never
 
+-- Helper for forwarding calls to a public function to its private equivalent.
+type Binding = {ident : Name, ty : Type, body : Expr}
+let _forwardCall : Name -> (Expr -> Expr) -> Binding -> (Binding, Binding) =
+  use FunAst in
+    lam local. lam f. lam bind.
+      let fwdVar = _fwdVarFromName bind.ident in
+      let newBody = lam args.
+        bind_ (nulet_ fwdVar (appSeq_ (nvar_ local) (map nvar_ args)))
+        (nvar_ fwdVar)
+      in
+      let localFun = {{bind with ident = local}
+                            with body = f bind.body}
+      in (localFun, {bind with body = _lamWithBody newBody bind.body})
+
+
 --
 lang ContextAwareHoles = Ast2CallGraph + HoleAst + IntAst + MatchAst + NeverAst
                          -- Included for debugging
@@ -428,17 +445,14 @@ lang ContextAwareHoles = Ast2CallGraph + HoleAst + IntAst + MatchAst + NeverAst
         (lam _. error "Lookup failed")
         (hashmapLookup {eq = _eqn, hashfn = _nameHash} id m)
 
-
   -- Transform a program with decision points. Returns a function of type
   -- 'Skeleton'. Applying this function to a lookup function yields an MExpr
   -- program where the values of the decision points have been statically
   -- replaced by values given by the lookup function.
   sem transform (publicFns : [Name]) =
   | tm ->
-    let glob2loc =
-      _initNameMap publicFns (lam n. nameSym (concat "_" (nameGetStr n)))
-    in
-    let tm = _placeSentries glob2loc tm in
+    let pub2priv = _nameMapInit publicFns identity _privFunFromName in
+    let tm = _replacePublic pub2priv tm in
     let info = callCtxInit publicFns (toCallGraph tm) tm in
     -- Declare the incoming variables
     let incVars =
@@ -448,64 +462,51 @@ lang ContextAwareHoles = Ast2CallGraph + HoleAst + IntAst + MatchAst + NeverAst
     let tm = bind_ incVars tm in
     lam lookup. _maintainCallCtx lookup info _callGraphTop tm
 
-  sem _placeSentries (glob2loc : Hashmap Name Name) =
+  -- Move the contents of each public function to a hidden private function, and
+  -- forward the call to the public functions to their private equivalent.
+  sem _replacePublic (pub2priv : Hashmap Name Name) =
+  -- Function call: forward call for public function
   | TmLet ({ body = TmApp a } & t) ->
     match _appGetCallee (TmApp a) with Some callee then
-      match hashmapLookup {eq = _eqn, hashfn = _nameHash} callee glob2loc
+      match hashmapLookup {eq = _eqn, hashfn = _nameHash} callee pub2priv
       with Some local then
         TmLet {{t with body = _appSetCallee (TmApp a) local}
-                  with inexpr = _placeSentries glob2loc t.inexpr}
-      else
-        TmLet {t with inexpr = _placeSentries glob2loc t.inexpr}
-    else
-      TmLet {t with inexpr = _placeSentries glob2loc t.inexpr}
+                  with inexpr = _replacePublic pub2priv t.inexpr}
+      else TmLet {t with inexpr = _replacePublic pub2priv t.inexpr}
+    else TmLet {t with inexpr = _replacePublic pub2priv t.inexpr}
 
+  -- Function definition: create private equivalent of public functions
   | TmLet ({ body = TmLam lm } & t) ->
-    match hashmapLookup {eq = _eqn, hashfn = _nameHash} t.ident glob2loc
+    match hashmapLookup {eq = _eqn, hashfn = _nameHash} t.ident pub2priv
     with Some local then
-      let localCallVar = nameSym (concat "forward_" (nameGetStr t.ident)) in
-      let pubFunAndRest =
-        TmLet
-          {{t with body =
-            _lamWithBody
-              (lam args. bind_
-                (nulet_ localCallVar (appSeq_ (nvar_ local) (map nvar_ args)))
-                (nvar_ localCallVar))
-              (TmLam lm)}
-              with inexpr = _placeSentries glob2loc t.inexpr}
-      in
-      TmLet {{{t with ident = local}
-                 with body = _placeSentries glob2loc t.body}
-                 with inexpr = pubFunAndRest}
-    else
-      TmLet {{t with inexpr = _placeSentries glob2loc t.inexpr}
-                with body = _placeSentries glob2loc t.body}
+      match _forwardCall local (_replacePublic pub2priv) t with (priv, pub) then
+        let pubAndRest =
+          TmLet {pub with inexpr = _replacePublic pub2priv t.inexpr}
+        in TmLet {priv with inexpr = pubAndRest}
+      else never
+    else TmLet {{t with inexpr = _replacePublic pub2priv t.inexpr}
+                   with body = _replacePublic pub2priv t.body}
 
   | TmRecLets ({ bindings = bindings, inexpr = inexpr } & t) ->
     let newBinds = foldl
       (lam acc. lam bind.
         match bind with { body = TmLam lm } then
-          match hashmapLookup {eq = _eqn, hashfn = _nameHash} bind.ident glob2loc
+          match hashmapLookup {eq = _eqn, hashfn =_nameHash} bind.ident pub2priv
           with Some local then
-            let localCallVar = nameSym (concat "forward_" (nameGetStr bind.ident)) in
-            let newBody = lam args.
-              bind_ (nulet_ localCallVar (appSeq_ (nvar_ local) (map nvar_ args)))
-                    (nvar_ localCallVar)
-            in
-            let localFun = {{bind with ident = local}
-                                  with body = _placeSentries glob2loc bind.body}
-            in concat [localFun, {bind with body = _lamWithBody newBody (TmLam lm)}] acc
-          else snoc acc bind
-        else snoc acc bind)
-      []
-      bindings
-    in
-    TmRecLets {{t with bindings = newBinds}
-                  with inexpr = _placeSentries glob2loc t.inexpr}
+            match _forwardCall local (_replacePublic pub2priv) bind
+            with (privBind, pubBind) then
+              concat [privBind, pubBind] acc
+            else never
+          else cons bind acc
+        else cons bind acc)
+      [] bindings
+    in TmRecLets {{t with bindings = newBinds}
+                     with inexpr = _replacePublic pub2priv t.inexpr}
 
-  | tm -> smap_Expr_Expr (_placeSentries glob2loc) tm
+  | tm -> smap_Expr_Expr (_replacePublic pub2priv) tm
 
-  -- Update incoming variables appropriately for function calls
+  -- Maintain call context history by updating incoming variables before
+  -- function calls.
   sem _maintainCallCtx (lookup : Lookup) (info : CallCtxInfo) (cur : Name) =
   -- Application: caller updates incoming variable of callee
   | TmLet ({ body = TmApp a } & t) ->
@@ -522,7 +523,7 @@ lang ContextAwareHoles = Ast2CallGraph + HoleAst + IntAst + MatchAst + NeverAst
       else le
     else le
 
-  -- Decision point: lookup the value depending on calling context
+  -- Decision point: lookup the value depending on call history.
   | TmLet ({ body = TmHole { depth = depth }, ident = ident} & t) ->
      match info with
       { callGraph = callGraph, publicFns = publicFns }
@@ -675,7 +676,7 @@ let appendToAst = lam ast. lam suffix.
   let ast = bind_ ast suffix in
   let skel = transform [funB, funC] ast in
   let res = skel lookup in
-  let _ = print (expr2str res) in
+  --let _ = print (expr2str res) in
   res
 in
 
