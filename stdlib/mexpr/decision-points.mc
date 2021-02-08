@@ -31,6 +31,13 @@ let _eqn = lam n1. lam n2.
 let _nameHash = lam n.
   sym2hash (_getSym n)
 
+let _initNameMap : [Name] -> (Name -> v) -> Hashmap Name v =
+  lam keys. lam f.
+    foldl (lam acc. lam k.
+             hashmapInsert {eq = _eqn, hashfn = _nameHash} k (f k) acc)
+      hashmapEmpty
+      keys
+
 -------------------------
 -- Call graph creation --
 -------------------------
@@ -187,11 +194,7 @@ type CallCtxInfo = {
   -- destination node.
   lbl2count: Hashmap Name Int,
 
-  -- List of public functions in the program.
-  publicFns: [Name],
-
-  -- Maps names of public functions to their internal nodes.
-  pub2internal: Hashmap Name Name
+  publicFns: [Name]
 
 }
 
@@ -237,15 +240,8 @@ let callCtxInit : [Name] -> CallGraph Name Name -> Expr -> CallCtxInfo =
             hashmapEmpty
             (digraphVertices callGraph)
     in
-    let pub2internal =
-      foldl (lam acc. lam funName.
-               let internalFunName = nameSym (concat "_" (nameGetStr funName)) in
-               hashmapInsert {eq = _eqn, hashfn = _nameHash}
-                 funName internalFunName acc)
-            hashmapEmpty publicFns
-  in
-  { callGraph = callGraph, fun2inc = fun2inc, lbl2inc = lbl2inc,
-    lbl2count = lbl2count, publicFns = publicFns, pub2internal = pub2internal }
+    { callGraph = callGraph, fun2inc = fun2inc, lbl2inc = lbl2inc,
+      lbl2count = lbl2count, publicFns = publicFns }
 
 -- Returns the binding of a function name, or None () if the name is not a node
 -- in the call graph.
@@ -304,10 +300,10 @@ let _incUndef = 0
 
 
 
--- Get the leftmost node (callee function) in a (nested) application node.
--- Returns an optional: either the name of the variable if the leftmost node is
--- a node, otherwise None ().
-let _nestedAppGetCallee = use AppAst in use VarAst in lam tm.
+-- Get the leftmost node (callee function) in a nested application node. Returns
+-- optionally the variable name if the leftmost node is a variable, otherwise
+-- None ().
+let _appGetCallee : Expr -> Option Name = use AppAst in use VarAst in lam tm.
   recursive let work = lam app.
     match app with TmApp {lhs = TmVar v} then
       Some v.ident
@@ -316,16 +312,59 @@ let _nestedAppGetCallee = use AppAst in use VarAst in lam tm.
     else None ()
   in work tm
 
-let _nestedAppSetCallee : Expr -> Name -> Expr = use AppAst in use VarAst in
+let _x = nameSym "x"
+let _y = nameSym "y"
+utest _appGetCallee (appf3_ (nvar_ _x) true_ (nvar_ _y) (int_ 4)) with Some _x
+utest _appGetCallee (addi_ (nvar_ _x) (int_ 3)) with None ()
+
+-- Set the leftmost node (callee function) to a given name in a nested
+-- application.
+let _appSetCallee : Expr -> Name -> Expr = use AppAst in use VarAst in
   lam tm. lam callee.
     recursive let work : Expr -> Expr = lam app.
       match app with TmApp ({lhs = TmVar v} & a) then
         TmApp {a with lhs = TmVar {v with ident = callee}}
-      else match app with TmApp {lhs = TmApp a} then
-        work (TmApp a)
+      else match app with TmApp ({lhs = TmApp a} & t) then
+        TmApp {t with lhs = work (TmApp a)}
       else error "Expected a nested application node"
     in work tm
 
+let _x = nameSym "x"
+let _y = nameSym "y"
+utest _appSetCallee
+      (appf2_ (nvar_ _x) (nvar_ _y) (int_ 4)) _y
+with  (appf2_ (nvar_ _y) (nvar_ _y) (int_ 4))
+
+-- Get the argument list of a nested lambda expression..
+let _lamArgList : Expr -> [Name] = use FunAst in lam tm.
+  recursive let work : Expr -> [Name] -> [Name] = lam tm. lam acc.
+    match tm with TmLam { body = TmLam lm, ident = ident } then
+      work (TmLam lm) (cons ident acc)
+    else match tm with TmLam { ident = ident } then
+      snoc acc ident
+    else error "Expected a lambda expression"
+  in work tm []
+
+let _x = nameSym "x"
+let _y = nameSym "y"
+utest _lamArgList (nulam_ _x (nulam_ _y (int_ 2))) with [_x, _y]
+
+-- Replace the innermost body in a nested lambda expression.
+let _lamWithBody : Expr -> Expr -> Expr = use FunAst in lam tm. lam body.
+  recursive let work : Expr -> Expr = lam tm.
+    match tm with TmLam ({ body = TmLam lm } & t) then
+      TmLam {t with body = work (TmLam lm)}
+    else match tm with TmLam t then
+      TmLam {t with body = body}
+    else error "Expected a lambda expression"
+  in work tm
+
+let _x = nameSym "x"
+let _y = nameSym "y"
+utest
+  _lamWithBody (nulam_ _x (nulam_ _y (addi_ (int_ 1) (int_ 1))))
+               (muli_ (int_ 3) (nvar_ _y))
+with (nulam_ _x (nulam_ _y (muli_ (int_ 3) (nvar_ _y))))
 
 -- Generate skeleton code for looking up a value of a decision point depending
 -- on its call history
@@ -405,6 +444,10 @@ lang ContextAwareHoles = Ast2CallGraph + HoleAst + IntAst + MatchAst + NeverAst
   -- replaced by values given by the lookup function.
   sem transform (publicFns : [Name]) =
   | tm ->
+    let glob2loc =
+      _initNameMap publicFns (lam n. nameSym (concat "_" (nameGetStr n)))
+    in
+    let tm = _placeSentries glob2loc tm in
     let info = callCtxInit publicFns (toCallGraph tm) tm in
     -- Declare the incoming variables
     let incVars =
@@ -414,21 +457,78 @@ lang ContextAwareHoles = Ast2CallGraph + HoleAst + IntAst + MatchAst + NeverAst
     let tm = bind_ incVars tm in
     lam lookup. _maintainCallCtx lookup info _callGraphTop tm
 
-  sem _placeSentries (info : CallCtxInfo) =
+  sem _placeSentries (glob2loc : Hashmap Name Name) =
   | TmLet ({ body = TmApp a } & t) ->
-    match _nestedAppGetCallee (TmApp a) with Some callee then
-      match callCtxPubLookup callee info with Some internal then
-        TmLet {{t with body = _nestedAppSetCallee (TmApp a) internal}
-                  with inexpr = _placeSentries t.inexpr}
-      else TmLet {t with inexpr = _placeSentries t.inexpr}
-    else TmLet {t with inexpr = _placeSentries t.inexpr}
+    match _appGetCallee (TmApp a) with Some callee then
+      match hashmapLookup {eq = _eqn, hashfn = _nameHash} callee glob2loc
+      with Some local then
+        TmLet {{t with body = _appSetCallee (TmApp a) local}
+                  with inexpr = _placeSentries glob2loc t.inexpr}
+      else
+        TmLet {t with inexpr = _placeSentries glob2loc t.inexpr}
+    else
+      TmLet {t with inexpr = _placeSentries glob2loc t.inexpr}
 
-  -- | TmLet ({ body = TmLam lm } & t) ->
-  --   match callCtxPubLookup lm.ident info with Some internal then
-  --     -- replace body with call to internal function (in ANF)
-  --     -- inexpr with let _<fun> = lam. (whatever was in <fun>)
-  --   else
-  | tm -> smap_Expr_Expr (_placeSentries info) tm
+  -- TODO: start here
+  -- let f = lam x. lam y.
+  --   addi x y
+  -- in rest
+  -- ->
+  -- let _f = lam x. lam y.
+  --   addi x y
+  -- in
+  -- let f = lam x. lam y.
+  --   _f x y
+  -- in rest
+  | TmLet ({ body = TmLam lm } & t) ->
+    match hashmapLookup {eq = _eqn, hashfn = _nameHash} t.ident glob2loc
+    with Some local then
+      -- replace body with call to local function (in ANF)
+      let args = _lamArgList t.body in
+      let localCallVar = nameSym (concat "forward_" (nameGetStr t.ident)) in
+      let pubFunAndRest =
+        TmLet
+          {{t with body =
+            _lamWithBody (TmLam lm) (bind_
+              (nulet_ localCallVar (appSeq_ (nvar_ local) (map nvar_ args)))
+              (nvar_ localCallVar))}
+              with inexpr = _placeSentries glob2loc t.inexpr}
+      in
+      -- TODO: arguments in lambda need new symbols?
+      --let localFun = TmLet {{t with ident = local}
+      --                         with body = _placeSentries glob2loc t.body}
+      --in
+      TmLet {{{t with ident = local}
+                 with body = _placeSentries glob2loc t.body}
+                 with inexpr = pubFunAndRest}
+    else
+      TmLet {{t with inexpr = _placeSentries glob2loc t.inexpr}
+                with body = _placeSentries glob2loc t.body}
+
+  | TmRecLets ({ bindings = bindings, inexpr = inexpr } & t) ->
+    let newBinds = foldl
+      (lam acc. lam bind.
+        match bind with { body = TmLam lm } then
+          match hashmapLookup {eq = _eqn, hashfn = _nameHash} bind.ident glob2loc
+          with Some local then
+            let args = _lamArgList bind.body in
+            let localCallVar = nameSym (concat "forward_" (nameGetStr bind.ident)) in
+            let newBody =
+              bind_ (nulet_ localCallVar (appSeq_ (nvar_ local) (map nvar_ args)))
+                    (nvar_ localCallVar)
+            in
+            let localFun = {{bind with ident = local}
+                                  with body = _placeSentries glob2loc bind.body}
+            in concat [localFun, {bind with body = _lamWithBody (TmLam lm) newBody}] acc
+          else snoc acc bind
+        else snoc acc bind)
+      []
+      bindings
+    in
+    TmRecLets {{t with bindings = newBinds}
+                  with inexpr = _placeSentries glob2loc t.inexpr}
+
+  | tm -> smap_Expr_Expr (_placeSentries glob2loc) tm
 
   -- Update incoming variables appropriately for function calls
   sem _maintainCallCtx (lookup : Lookup) (info : CallCtxInfo) (cur : Name) =
@@ -438,7 +538,7 @@ lang ContextAwareHoles = Ast2CallGraph + HoleAst + IntAst + MatchAst + NeverAst
     -- application node (cannot contain function definitions or calls)
     -- TODO: Double check above
     let le = TmLet {t with inexpr = _maintainCallCtx lookup info cur t.inexpr} in
-    match _nestedAppGetCallee (TmApp a) with Some callee then
+    match _appGetCallee (TmApp a) with Some callee then
       match callCtxFunLookup callee info
       with Some iv then
         -- Set the incoming var of callee to current node
@@ -502,13 +602,13 @@ let funB = nameSym "funB" in
 let funC = nameSym "funC" in
 let funD = nameSym "funD" in
 
-let pprint = lam ast.
+let pprint = lam ast. lam pub.
   let _ = printLn "----- BEFORE ANF -----\n" in
   let _ = printLn (expr2str ast) in
   let ast = anf ast in
   let _ = printLn "\n----- AFTER ANF -----\n" in
   let _ = printLn (expr2str ast) in
-  let skel = transform [] ast in
+  let skel = transform pub ast in
   let lookup = initAssignments ast in
   let _ = printLn "\n----- AFTER TRANSFORMATION -----\n" in
   let _ = printLn (expr2str (skel lookup)) in
@@ -555,18 +655,18 @@ let ast = bindall_ [  nulet_ funA (ulam_ "_"
                         (bind_ (ulet_ "h" (hole_ (int_ 0) 2))
                                (var_ "h")))
                     , nureclets_add funB
-                        (ulam_ "x"
-                          (ulam_ "y" (if_ (var_ "x")
+                        (ulam_ "xB"
+                          (ulam_ "y" (if_ (var_ "xB")
                                           (if_ (var_ "y")
                                                (appf2_ (nvar_ funB) true_ false_)
-                                               (app_ (nvar_ funA) (var_ "x")))
+                                               (app_ (nvar_ funA) (var_ "xB")))
                                           (app_ (nvar_ funA) (var_ "y")))))
                         reclets_empty
-                    , nulet_ funC (ulam_ "x"
-                        (appf2_ (nvar_ funB) (var_ "x") false_))
+                    , nulet_ funC (ulam_ "xC"
+                        (appf2_ (nvar_ funB) (var_ "xC") false_))
                    ]
 in
-let _ = pprint ast in
+--let _ = pprint ast [funA, funB, funC] in
 let ast = anf ast in
 let cg = toCallGraph ast in
 let edgeCB =
@@ -591,15 +691,19 @@ let lookup = lam _. lam path.
   else match eqNameSeq path [edgeCB, edgeBA2] with true then int_ 2
   else match eqNameSeq path [edgeBB, edgeBA1] with true then int_ 3
   else match eqNameSeq path [edgeBB, edgeBA2] with true then int_ 4
-  else match eqNameSeq path [edgeBA1]         with true then int_ 5
-  else match eqNameSeq path [edgeBA2]         with true then int_ 6
-  else error "Unknown path"
+  else match path with _ ++ [e] then
+    if nameEq e edgeBA1 then int_ 5
+    else if nameEq e edgeBA2 then int_ 6
+    else error (join ["Unknown path: ", strJoin " " (map nameGetStr path)])
+  else error (join ["Unknown path: ", strJoin " " (map nameGetStr path)])
 in
 
 let appendToAst = lam ast. lam suffix.
   let ast = bind_ ast suffix in
-  let skel = transform [funC, funB] ast in
-  skel lookup
+  let skel = transform [funB, funC] ast in
+  let res = skel lookup in
+  let _ = print (expr2str res) in
+  res
 in
 
 utest eval { env = [] } (appendToAst ast

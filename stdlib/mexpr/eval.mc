@@ -64,7 +64,7 @@ lang VarEval = VarAst + IdentifierPrettyPrint
     match _evalLookup ident ctx.env with Some t then
       eval ctx t
     else
-      error (concat "Unknown variable: " (pprintVarString ident))
+      error (concat "Unknown variable: " (pprintVarString (nameGetStr ident)))
 end
 
 lang AppEval = AppAst
