@@ -7,6 +7,7 @@ include "eq-paths.mc"
 include "anf.mc"
 include "name.mc"
 include "hashmap.mc"
+include "eq.mc"
 
 -- This file contains implementations related to decision points.
 
@@ -335,40 +336,30 @@ utest _appSetCallee
       (appf2_ (nvar_ _x) (nvar_ _y) (int_ 4)) _y
 with  (appf2_ (nvar_ _y) (nvar_ _y) (int_ 4))
 
--- Get the argument list of a nested lambda expression..
-let _lamArgList : Expr -> [Name] = use FunAst in lam tm.
-  recursive let work : Expr -> [Name] -> [Name] = lam tm. lam acc.
-    match tm with TmLam { body = TmLam lm, ident = ident } then
-      work (TmLam lm) (cons ident acc)
-    else match tm with TmLam { ident = ident } then
-      snoc acc ident
-    else error "Expected a lambda expression"
-  in work tm []
+-- Replace the innermost body in a nested lambda expression by the result of a
+-- function that operates on the list of arguments of the lambda.
+let _lamWithBody : ([Name] -> Expr) -> Expr -> Expr = use FunAst in
+  lam f. lam tm.
+    recursive let work : [Name] -> Expr -> Expr = lam acc. lam tm.
+      match tm with TmLam ({ body = TmLam lm, ident = ident } & t) then
+        TmLam {t with body = work (snoc acc ident) (TmLam lm)}
+      else match tm with TmLam ({ ident = ident } & t) then
+        TmLam {t with body = f (snoc acc ident)}
+      else error "Expected a lambda expression"
+    in work [] tm
 
 let _x = nameSym "x"
 let _y = nameSym "y"
-utest _lamArgList (nulam_ _x (nulam_ _y (int_ 2))) with [_x, _y]
-
--- Replace the innermost body in a nested lambda expression.
-let _lamWithBody : Expr -> Expr -> Expr = use FunAst in lam tm. lam body.
-  recursive let work : Expr -> Expr = lam tm.
-    match tm with TmLam ({ body = TmLam lm } & t) then
-      TmLam {t with body = work (TmLam lm)}
-    else match tm with TmLam t then
-      TmLam {t with body = body}
-    else error "Expected a lambda expression"
-  in work tm
-
-let _x = nameSym "x"
-let _y = nameSym "y"
+let _z = nameSym "z"
 utest
-  _lamWithBody (nulam_ _x (nulam_ _y (addi_ (int_ 1) (int_ 1))))
-               (muli_ (int_ 3) (nvar_ _y))
-with (nulam_ _x (nulam_ _y (muli_ (int_ 3) (nvar_ _y))))
+  _lamWithBody (lam args. match args with [x, y, z] then
+                  muli_ (nvar_ x) (nvar_ y)
+                else error "Test failed")
+               (nulam_ _x (nulam_ _y (nulam_ _z (addi_ (int_ 1) (int_ 1)))))
+with (nulam_ _x (nulam_ _y (nulam_ _z (muli_ (nvar_ _x) (nvar_ _y)))))
 
 -- Generate skeleton code for looking up a value of a decision point depending
 -- on its call history
--- TODO: handle public function
 let _lookupCallCtx : Lookup -> Name -> Name -> CallCtxInfo -> [[Name]] -> Skeleton =
   use MatchAst in use NeverAst in
     lam lookup. lam holeId. lam incVarName. lam info. lam paths.
@@ -469,35 +460,20 @@ lang ContextAwareHoles = Ast2CallGraph + HoleAst + IntAst + MatchAst + NeverAst
     else
       TmLet {t with inexpr = _placeSentries glob2loc t.inexpr}
 
-  -- TODO: start here
-  -- let f = lam x. lam y.
-  --   addi x y
-  -- in rest
-  -- ->
-  -- let _f = lam x. lam y.
-  --   addi x y
-  -- in
-  -- let f = lam x. lam y.
-  --   _f x y
-  -- in rest
   | TmLet ({ body = TmLam lm } & t) ->
     match hashmapLookup {eq = _eqn, hashfn = _nameHash} t.ident glob2loc
     with Some local then
-      -- replace body with call to local function (in ANF)
-      let args = _lamArgList t.body in
       let localCallVar = nameSym (concat "forward_" (nameGetStr t.ident)) in
       let pubFunAndRest =
         TmLet
           {{t with body =
-            _lamWithBody (TmLam lm) (bind_
-              (nulet_ localCallVar (appSeq_ (nvar_ local) (map nvar_ args)))
-              (nvar_ localCallVar))}
+            _lamWithBody
+              (lam args. bind_
+                (nulet_ localCallVar (appSeq_ (nvar_ local) (map nvar_ args)))
+                (nvar_ localCallVar))
+              (TmLam lm)}
               with inexpr = _placeSentries glob2loc t.inexpr}
       in
-      -- TODO: arguments in lambda need new symbols?
-      --let localFun = TmLet {{t with ident = local}
-      --                         with body = _placeSentries glob2loc t.body}
-      --in
       TmLet {{{t with ident = local}
                  with body = _placeSentries glob2loc t.body}
                  with inexpr = pubFunAndRest}
@@ -511,15 +487,14 @@ lang ContextAwareHoles = Ast2CallGraph + HoleAst + IntAst + MatchAst + NeverAst
         match bind with { body = TmLam lm } then
           match hashmapLookup {eq = _eqn, hashfn = _nameHash} bind.ident glob2loc
           with Some local then
-            let args = _lamArgList bind.body in
             let localCallVar = nameSym (concat "forward_" (nameGetStr bind.ident)) in
-            let newBody =
+            let newBody = lam args.
               bind_ (nulet_ localCallVar (appSeq_ (nvar_ local) (map nvar_ args)))
                     (nvar_ localCallVar)
             in
             let localFun = {{bind with ident = local}
                                   with body = _placeSentries glob2loc bind.body}
-            in concat [localFun, {bind with body = _lamWithBody (TmLam lm) newBody}] acc
+            in concat [localFun, {bind with body = _lamWithBody newBody (TmLam lm)}] acc
           else snoc acc bind
         else snoc acc bind)
       []
@@ -536,7 +511,6 @@ lang ContextAwareHoles = Ast2CallGraph + HoleAst + IntAst + MatchAst + NeverAst
   | TmLet ({ body = TmApp a } & t) ->
     -- NOTE(Linnea, 2021-01-29): ANF form means no recursion necessary for an
     -- application node (cannot contain function definitions or calls)
-    -- TODO: Double check above
     let le = TmLet {t with inexpr = _maintainCallCtx lookup info cur t.inexpr} in
     match _appGetCallee (TmApp a) with Some callee then
       match callCtxFunLookup callee info
@@ -544,8 +518,7 @@ lang ContextAwareHoles = Ast2CallGraph + HoleAst + IntAst + MatchAst + NeverAst
         -- Set the incoming var of callee to current node
         let count = callCtxLbl2Count t.ident info in
         let update = modref_ (nvar_ iv) (int_ count) in
-        bind_
-          (nulet_ (nameSym "_") update) le
+        bind_ (nulet_ (nameSym "_") update) le
       else le
     else le
 
