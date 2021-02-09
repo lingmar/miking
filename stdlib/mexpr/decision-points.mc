@@ -11,13 +11,6 @@ include "eq.mc"
 
 -- This file contains implementations related to decision points.
 
--- TODO
--- More test cases
--- Enable debugging of symbols in pprint?
--- Represent paths as trees?
--- Handle public functions: make dummy nodes and match in lookup
-   -- Create the call graph AFTER sentry transformation?
-
 let _getSym = lam n.
   optionGetOrElse
     (lam _. error "Expected symbol")
@@ -186,7 +179,6 @@ type CallCtxInfo = {
   -- graph)
   publicFns: [Name],
 
-
   -- Maps names of functions to the name of its incoming variable. The incoming
   -- variables keep track of the execution path during runtime.
   fun2inc: Hashmap Name Name,
@@ -219,8 +211,8 @@ let callCtxInit : [Name] -> CallGraph Name Name -> Expr -> CallCtxInfo =
         (lam e. match e with (_, _, lbl) then lbl else never)
         (lam e.
            match e with (from, _, _) then
-           optionGetOrElse (lam _. error "Internal error: lookup failed")
-             (hashmapLookup {eq = _eqn, hashfn = _nameHash} from fun2inc)
+             optionGetOrElse (lam _. error "Internal error: lookup failed")
+               (hashmapLookup {eq = _eqn, hashfn = _nameHash} from fun2inc)
            else never)
     in
     let lbl2count =
@@ -329,7 +321,7 @@ let _appSetCallee : Expr -> Name -> Expr = use AppAst in use VarAst in
         TmApp {a with lhs = TmVar {v with ident = callee}}
       else match app with TmApp ({lhs = TmApp a} & t) then
         TmApp {t with lhs = work (TmApp a)}
-      else error "Expected a nested application node"
+      else error "Expected an application"
     in work tm
 
 let _x = nameSym "x"
@@ -354,9 +346,10 @@ let _x = nameSym "x"
 let _y = nameSym "y"
 let _z = nameSym "z"
 utest
-  _lamWithBody (lam args. match args with [x, y, z] then
-                  muli_ (nvar_ x) (nvar_ y)
-                else error "Test failed")
+  _lamWithBody (lam args.
+                  match args with [x, y, z] then
+                    muli_ (nvar_ x) (nvar_ y)
+                  else error "Test failed")
                (nulam_ _x (nulam_ _y (nulam_ _z (addi_ (int_ 1) (int_ 1)))))
 with (nulam_ _x (nulam_ _y (nulam_ _z (muli_ (nvar_ _x) (nvar_ _y)))))
 
@@ -401,7 +394,8 @@ let _lookupCallCtx : Lookup -> Name -> Name -> CallCtxInfo -> [[Name]] -> Skelet
         work incVarName (map reverse paths) []
       else never
 
--- Helper for forwarding calls to a public function to its private equivalent.
+-- Helper for creating a hidden equivalent of a public function and replace the
+-- public function with a forwarding call to the hidden function.
 type Binding = {ident : Name, ty : Type, body : Expr}
 let _forwardCall : Name -> (Expr -> Expr) -> Binding -> (Binding, Binding) =
   use FunAst in
@@ -571,46 +565,217 @@ use TestLang in
 
 let anf = compose normalizeTerm symbolize in
 
+----------------------
+-- Call graph tests --
+----------------------
+
+let doCallGraphTests = lam r.
+  let tests = lam ast. lam strVs. lam strEdgs.
+    let toStr = lam ng.
+      digraphAddEdges
+        (map (lam t. (nameGetStr t.0, nameGetStr t.1, t.2)) (digraphEdges ng))
+        (digraphAddVertices (map nameGetStr (digraphVertices ng))
+                            (digraphEmpty eqString _eqn))
+    in
+    let sg = toStr (toCallGraph ast) in
+
+    utest setEqual eqString strVs (digraphVertices sg) with true in
+
+    let es = digraphEdges sg in
+    utest length es with length strEdgs in
+    map (lam t. (utest digraphIsSuccessor t.1 t.0 sg with true in ())) strEdgs
+  in
+  tests (anf r.ast) r.vs r.calls
+in
+
+-- 1
+let constant = {
+  ast = int_ 1,
+  expected = int_ 1,
+  vs = ["top"],
+  calls = []
+} in
+
+-- let foo = lam x. x in ()
+let identity = {
+  ast = ulet_ "foo" (ulam_ "x" (var_ "x")),
+  expected = unit_,
+  vs = ["top", "foo"],
+  calls = []
+} in
+
+-- let foo = lam x. x in
+-- let bar = lam x. foo x in ()
+let funCall = {
+  ast = bind_ (ulet_ "foo" (ulam_ "x" (var_ "x")))
+              (ulet_ "bar" (ulam_ "x" (app_ (var_ "foo") (var_ "x")))),
+  expected = unit_,
+  vs = ["top", "foo", "bar"],
+  calls = [("bar", "foo")]
+} in
+
+-- let foo = lam x. x in
+-- let bar = lam x. addi (foo x) (foo x) in
+-- bar 1
+let ast =
+  bindall_ [identity.ast,
+            ulet_ "bar" (ulam_ "x" (addi_ (app_ (var_ "foo") (var_ "x"))
+                                         (app_ (var_ "foo") (var_ "x")))),
+            (app_ (var_ "bar") (int_ 1))] in
+let callSameFunctionTwice = {
+  ast = ast,
+  expected = int_ 2,
+  vs = ["top", "foo", "bar"],
+  calls = [("top", "bar"), ("bar", "foo"), ("bar", "foo")]
+} in
+
+--let foo = lam x. lam y. addi x y in
+--foo 1 2
+let twoArgs = {
+  ast = bind_
+          (ulet_ "foo"
+            (ulam_ "x" (ulam_ "y" (addi_ (var_ "x") (var_ "y")))))
+          (appf2_ (var_ "foo") (int_ 1) (int_ 2)),
+  expected = int_ 3,
+  vs = ["top", "foo"],
+  calls = [("top", "foo")]
+} in
+
+-- let foo = lam a. lam b.
+--     let bar = lam x. addi b x in
+--     let b = 3 in
+--     addi (bar b) a
+-- in ()
+let innerFun = {
+  ast = ulet_ "foo" (ulam_ "a" (ulam_ "b" (
+          let bar = ulet_ "bar" (ulam_ "x"
+                         (addi_ (var_ "b") (var_ "x"))) in
+          let babar = ulet_ "b" (int_ 3) in
+          bind_ bar (
+          bind_ babar (
+            addi_ (app_ (var_ "bar")
+                        (var_ "b"))
+                  (var_ "a")))))),
+  expected = unit_,
+  vs = ["top", "foo", "bar"],
+  calls = [("foo", "bar")]
+} in
+
+-- let foo = lam x. x in
+-- let a = foo 1 in
+-- a
+let letWithFunCall = {
+  ast = let foo = ulet_ "foo" (ulam_ "x" (var_ "x")) in
+        let a = ulet_ "a" (app_ (var_ "foo") (int_ 1)) in
+        bind_ (bind_ foo a) (var_ "a"),
+  expected = int_ 1,
+  vs = ["top", "foo"],
+  calls = [("top", "foo")]
+} in
+
+-- recursive let factorial = lam n.
+--     if eqi n 0 then
+--       1
+--     else
+--       muli n (factorial (subi n 1))
+-- in
+-- factorial 4
+let factorial = {
+  ast = bind_
+    (ureclets_add "factorial"
+           (lam_ "n" (TyInt {})
+                 (if_ (eqi_ (var_ "n") (int_ 0))
+                      (int_ 1)
+                      (muli_ (var_ "n")
+                             (app_ (var_ "factorial")
+                                   (subi_ (var_ "n")
+                                          (int_ 1))))))
+     reclets_empty)
+    (app_ (var_ "factorial") (int_ 2)),
+  expected = int_ 2,
+  vs = ["top", "factorial"],
+  calls = [("top", "factorial"), ("factorial", "factorial")]
+} in
+
+-- recursive
+--     let even = lam x.
+--         if eqi x 0
+--         then true
+--         else odd (subi x 1)
+--     let odd = lam x.
+--         if eqi x 1
+--         then true
+--         else even (subi x 1)
+-- in even 4
+let evenOdd ={
+  ast = bind_
+    (ureclets_add "even" (ulam_ "x" (if_ (eqi_ (var_ "x") (int_ 0))
+                                       (true_)
+                                       (app_ (var_ "odd") (subi_ (var_ "x") (int_ 1)))))
+    (ureclets_add "odd" (ulam_ "x" (if_ (eqi_ (var_ "x") (int_ 1))
+                                      (true_)
+                                      (app_ (var_ "even") (subi_ (var_ "x") (int_ 1)))))
+     reclets_empty))
+    (app_ (var_ "even") (int_ 2)),
+  expected = true_,
+  vs = ["top", "even", "odd"],
+  calls = [("top", "even"), ("even", "odd"), ("odd", "even")]
+} in
+
+-- let bar = lam y. y in
+-- let foo = lam f. lam x. f x in -- cannot see that foo calls bar
+-- foo bar 1
+let hiddenCall = {
+  ast = bindall_ [
+          ulet_ "bar" (ulam_ "y" (var_ "y")),
+          ulet_ "foo" (ulam_ "f" (ulam_ "x" (app_ (var_ "f") (var_ "x")))),
+          appf2_ (var_ "foo") (var_ "bar") (int_ 1)],
+  expected = int_ 1,
+  vs = ["top", "foo", "bar"],
+  calls = [("top", "foo")]
+} in
+
+
+let cgTests = [
+    constant
+  , identity
+  , funCall
+  , callSameFunctionTwice
+  , innerFun
+  , letWithFunCall
+  , factorial
+  , evenOdd
+  , hiddenCall
+] in
+
+let _ = map doCallGraphTests cgTests in
+
+
+---------------------------
+-- Decision points tests --
+---------------------------
+
 let funA = nameSym "funA" in
 let funB = nameSym "funB" in
 let funC = nameSym "funC" in
 let funD = nameSym "funD" in
 
-let pprint = lam ast. lam pub.
-  let _ = printLn "----- BEFORE ANF -----\n" in
-  let _ = printLn (expr2str ast) in
-  let ast = anf ast in
-  let _ = printLn "\n----- AFTER ANF -----\n" in
-  let _ = printLn (expr2str ast) in
-  let skel = transform pub ast in
-  let lookup = initAssignments ast in
-  let _ = printLn "\n----- AFTER TRANSFORMATION -----\n" in
-  let _ = printLn (expr2str (skel lookup)) in
-  (skel lookup)
-in
+let debug = false in
 
-let ast = (bindall_
-  [  (nureclets_add funA (ulam_ "x" (bind_ (ulet_ "h" (hole_ true_ 2))
-                                  (if_ (var_ "h")
-                                       (app_ (nvar_ funB) (addi_ (var_ "x") (int_ 1)))
-                                       (app_ (nvar_ funA) (int_ 1)))))
-     (nureclets_add funB (ulam_ "x" (if_ (geqi_ (var_ "x") (int_ 5))
-                                         (var_ "x")
-                                         (app_ (nvar_ funA) (addi_ (var_ "x") (int_ 1)))))
-     reclets_empty))
-   , nulet_ funC (ulam_ "x" (ulam_ "y" (if_ (var_ "x")
-                                            (app_ (nvar_ funA) (int_ 0))
-                                            (app_ (nvar_ funA) (var_ "y")))))
-   , nulet_ funD (ulam_ "x" (appf2_ (nvar_ funC) (var_ "x") (int_ 2)))
-   , ulet_ "a" (appf2_ (nvar_ funC) true_ (int_ 0))
-   , ulet_ "b" (appf2_ (nvar_ funC) false_ (int_ 1))
-   , ulet_ "c" (app_ (nvar_ funD) true_)
-   , ulet_ "d" (app_ (nvar_ funD) false_)
-   , tuple_ [(var_ "a"), (var_ "b"), (var_ "c"), (var_ "d")]
-  ]) in
--- let prog = pprint ast in
---let res = eval { env = [] } prog in
---let _ = dprint res in
+let debugPrint = lam ast. lam pub.
+  if debug then
+    let _ = printLn "----- BEFORE ANF -----\n" in
+    let _ = printLn (expr2str ast) in
+    let ast = anf ast in
+    let _ = printLn "\n----- AFTER ANF -----\n" in
+    let _ = printLn (expr2str ast) in
+    let skel = transform pub ast in
+    let lookup = initAssignments ast in
+    let _ = printLn "\n----- AFTER TRANSFORMATION -----\n" in
+    let _ = printLn (expr2str (skel lookup)) in
+    ()
+  else ()
+in
 
 -- let funA = lam _.
 --   let h = hole 0 2 in
@@ -640,7 +805,7 @@ let ast = bindall_ [  nulet_ funA (ulam_ "_"
                         (appf2_ (nvar_ funB) (var_ "xC") false_))
                    ]
 in
---let _ = pprint ast [funA, funB, funC] in
+let _ = debugPrint ast [funB, funC] in
 let ast = anf ast in
 let cg = toCallGraph ast in
 let edgeCB =
@@ -672,11 +837,11 @@ let lookup = lam _. lam path.
   else error (join ["Unknown path: ", strJoin " " (map nameGetStr path)])
 in
 
+-- Extensions are possibly in non-ANF to mimic calls from outside the library.
 let appendToAst = lam ast. lam suffix.
   let ast = bind_ ast suffix in
   let skel = transform [funB, funC] ast in
   let res = skel lookup in
-  --let _ = print (expr2str res) in
   res
 in
 
@@ -704,48 +869,5 @@ utest eval { env = [] } (appendToAst ast
   (bind_ (nulet_ (nameSym "_") (app_ (nvar_ funC) false_))
          (appf2_ (nvar_ funB) false_ false_))
 ) with int_ 6 in
-
--- let s1 = gensym () in
--- let x = nameSetSym (nameNoSym "x") s1 in
--- let s2 = gensym () in
--- let y = nameSetSym (nameNoSym "y") s2 in
-
-
--- let ast = anf (ulet_ "f" (bindall_ [ulet_ "x" (ulam_ "x" (nulet_ x (hole_ true_ 2))),
---                                     ulet_ "y" (ulam_ "y" (nulet_ y (hole_ false_ 1))),
---                                     ulet_ "_" (app_ (var_ "x") (int_ 1)),
---                                     ulet_ "_" (app_ (var_ "x") (int_ 1))] )) in
-
--- let _ = print (expr2str ast) in
-
--- let cg = toCallGraph ast in
--- -- let _ = dprint (digraphVertices cg) in
-
--- let _ = printLn "\n-- Lookups --" in
--- let lookup = initAssignments ast in
--- let _ = dprint (lookup s1 []) in
--- let _ = dprint (lookup s2 []) in
--- let _ = printLn "\n" in
-
--- let _ = printLn "\n-- Transform -- \n" in
--- let skel = transform [] ast in
--- let _ = print (expr2str (skel lookup)) in
--- --let _ = dprint ast in
-
--- let ast = bind_
---     (ureclets_add "even" (ulam_ "x" (if_ (eqi_ (var_ "x") (int_ 0))
---                                        (true_)
---                                        (app_ (var_ "odd") (subi_ (var_ "x") (int_ 1)))))
---     (ureclets_add "odd" (ulam_ "x" (if_ (eqi_ (var_ "x") (int_ 1))
---                                       (true_)
---                                       (app_ (var_ "even") (subi_ (var_ "x") (int_ 1)))))
---      reclets_empty))
---     (app_ (var_ "even") (int_ 2))
--- in
--- let ast = anf ast in
-
--- let skel = transform [] ast in
--- let lookup = initAssignments ast in
--- let _ = printLn (expr2str (skel lookup)) in
 
 ()
