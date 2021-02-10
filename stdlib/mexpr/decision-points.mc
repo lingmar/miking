@@ -352,7 +352,7 @@ with (nulam_ _x (nulam_ _y (nulam_ _z (muli_ (nvar_ _x) (nvar_ _y)))))
 
 -- Generate skeleton code for looking up a value of a decision point depending
 -- on its call history
-let _lookupCallCtx : Lookup -> Name -> Name -> CallCtxInfo -> [[Name]] -> Skeleton =
+let _lookupCallCtx : Lookup -> Name -> Name -> CtxEnv -> [[Name]] -> Skeleton =
   use MatchAst in use NeverAst in
     lam lookup. lam holeId. lam incVarName. lam info. lam paths.
       match info with { lbl2inc = lbl2inc } then
@@ -383,7 +383,7 @@ let _lookupCallCtx : Lookup -> Name -> Name -> CallCtxInfo -> [[Name]] -> Skelet
               in
               let defaultVal =
                 if eqi (length nonEmpty) (length paths) then never_
-                else lookup holeId acc
+                else lookup holeId
               in
               matchall_ (snoc branches defaultVal)
             else never
@@ -410,11 +410,30 @@ type Lookup = Int -> Expr
 type Table = Map Name (Map [Name] Int)
 type CtxEnv = {info: CallCtxInfo, table: Table, count: Int}
 
+recursive let _cmpPaths = lam p1 : [Name]. lam p2 : [Name].
+  error "Not implemented"
+end
+
+
 let ctxEnvEmpty : [Name] -> CallGraph -> Expr -> CtxEnv =
   use Ast2CallGraph in lam public. lam g. lam tm.
-    { info = callCtxInit public g tm,
-    , table = mapEmpty 
+    { info = callCtxInit public g tm
+    , table = mapEmpty nameCmp
+    , count = 0
     }
+
+let ctxEnvAddHole : Name -> [Name] -> CtxEnv -> CtxEnv = lam name. lam paths. lam env.
+  match env with { count = count, table = table } then
+  match
+    foldl
+    (lam acc. lam k.
+       match acc with (m, i) then (mapInsert path i, addi i 1)
+       else never)
+    (mapEmpty _cmpPaths, count)
+    paths
+  with (m, count) then
+    {{env with count = count} with table = mapInsert name m}
+  else never else never
 
 --
 lang ContextAwareHoles = Ast2CallGraph + HoleAst + IntAst + MatchAst + NeverAst
@@ -458,14 +477,14 @@ lang ContextAwareHoles = Ast2CallGraph + HoleAst + IntAst + MatchAst + NeverAst
   | tm ->
     let pub2priv = _nameMapInit publicFns identity _privFunFromName in
     let tm = _replacePublic pub2priv tm in
-    let info = callCtxInit publicFns (toCallGraph tm) tm in
+    let env = ctxEnvEmpty publicFns (toCallGraph tm) tm in
     -- Declare the incoming variables
     let incVars =
       bindall_ (map (lam incVarName. nulet_ incVarName (ref_ (int_ _incUndef)))
-                    (callCtxIncVarNames info))
+                    (callCtxIncVarNames env.info))
     in
     let tm = bind_ incVars tm in
-    lam lookup. _maintainCallCtx lookup info _callGraphTop tm
+    lam lookup. _maintainCallCtx lookup env _callGraphTop tm
 
   -- Move the contents of each public function to a hidden private function, and
   -- forward the call to the public functions to their private equivalent.
@@ -534,7 +553,7 @@ lang ContextAwareHoles = Ast2CallGraph + HoleAst + IntAst + MatchAst + NeverAst
       { callGraph = callGraph, publicFns = publicFns }
      then
        let paths = eqPaths callGraph cur depth publicFns in
-       let env = _envAddHole ident paths in
+       let env = ctxEnvAddHole ident paths in
        let iv = callCtxFun2Inc cur env.info in
        let lookupCode = _lookupCallCtx lookup ident iv env paths in
        TmLet {{t with body = lookupCode}
@@ -840,78 +859,78 @@ in
 
 let eqNameSeq = setEqual _eqn in
 
-let lookup = lam _. lam path.
-  match      eqNameSeq path [edgeCB, edgeBA1] with true then int_ 1
-  else match eqNameSeq path [edgeCB, edgeBA2] with true then int_ 2
-  else match eqNameSeq path [edgeBB, edgeBA1] with true then int_ 3
-  else match eqNameSeq path [edgeBB, edgeBA2] with true then int_ 4
-  else match path with _ ++ [e] then
-    if nameEq e edgeBA1 then int_ 5
-    else if nameEq e edgeBA2 then int_ 6
-    else error (join ["Unknown path: ", strJoin " " (map nameGetStr path)])
-  else error (join ["Unknown path: ", strJoin " " (map nameGetStr path)])
-in
+-- let lookup = lam _. lam path.
+--   match      eqNameSeq path [edgeCB, edgeBA1] with true then int_ 1
+--   else match eqNameSeq path [edgeCB, edgeBA2] with true then int_ 2
+--   else match eqNameSeq path [edgeBB, edgeBA1] with true then int_ 3
+--   else match eqNameSeq path [edgeBB, edgeBA2] with true then int_ 4
+--   else match path with _ ++ [e] then
+--     if nameEq e edgeBA1 then int_ 5
+--     else if nameEq e edgeBA2 then int_ 6
+--     else error (join ["Unknown path: ", strJoin " " (map nameGetStr path)])
+--   else error (join ["Unknown path: ", strJoin " " (map nameGetStr path)])
+-- in
 
--- Extensions are possibly in non-ANF to mimic calls from outside the library.
-let appendToAst = lam ast. lam suffix.
-  let ast = bind_ ast suffix in
-  let skel = transform [funB, funC] ast in
-  let res = skel lookup in
-  let _ = print (expr2str res) in
-  res
-in
-
-utest eval { env = [] } (appendToAst ast
-  (app_ (nvar_ funC) true_)
-) with int_ 1 in
+-- -- Extensions are possibly in non-ANF to mimic calls from outside the library.
+-- let appendToAst = lam ast. lam suffix.
+--   let ast = bind_ ast suffix in
+--   let skel = transform [funB, funC] ast in
+--   let res = skel lookup in
+--   let _ = print (expr2str res) in
+--   res
+-- in
 
 -- utest eval { env = [] } (appendToAst ast
---   (app_ (nvar_ funC) false_)
--- ) with int_ 2 in
+--   (app_ (nvar_ funC) true_)
+-- ) with int_ 1 in
 
--- utest eval { env = [] } (appendToAst ast
---   (appf2_ (nvar_ funB) true_ true_)
--- ) with int_ 3 in
+-- -- utest eval { env = [] } (appendToAst ast
+-- --   (app_ (nvar_ funC) false_)
+-- -- ) with int_ 2 in
 
--- utest eval { env = [] } (appendToAst ast
---   (appf2_ (nvar_ funB) true_ false_)
--- ) with int_ 5 in
+-- -- utest eval { env = [] } (appendToAst ast
+-- --   (appf2_ (nvar_ funB) true_ true_)
+-- -- ) with int_ 3 in
 
--- utest eval { env = [] } (appendToAst ast
---   (appf2_ (nvar_ funB) false_ false_)
--- ) with int_ 6 in
+-- -- utest eval { env = [] } (appendToAst ast
+-- --   (appf2_ (nvar_ funB) true_ false_)
+-- -- ) with int_ 5 in
 
--- utest eval { env = [] } (appendToAst ast
---   (bind_ (nulet_ (nameSym "_") (app_ (nvar_ funC) false_))
---          (appf2_ (nvar_ funB) false_ false_))
--- ) with int_ 6 in
+-- -- utest eval { env = [] } (appendToAst ast
+-- --   (appf2_ (nvar_ funB) false_ false_)
+-- -- ) with int_ 6 in
 
--- let paths = eqPaths cg funA 2 [funB, funC] in
-let dprintLn = lam d. let _ = dprint d in printLn "" in
+-- -- utest eval { env = [] } (appendToAst ast
+-- --   (bind_ (nulet_ (nameSym "_") (app_ (nvar_ funC) false_))
+-- --          (appf2_ (nvar_ funB) false_ false_))
+-- -- ) with int_ 6 in
 
--- -- ca
--- let _ = dprintLn ([edgeCB, edgeBA1]) in
--- let _ = dprintLn (get paths 1) in
--- let _ = printLn "" in
+-- -- let paths = eqPaths cg funA 2 [funB, funC] in
+-- let dprintLn = lam d. let _ = dprint d in printLn "" in
 
--- -- a
--- let _ = dprintLn (get paths 0) in
--- let _ = dprintLn ([edgeBA1]) in
--- let _ = printLn "" in
+-- -- -- ca
+-- -- let _ = dprintLn ([edgeCB, edgeBA1]) in
+-- -- let _ = dprintLn (get paths 1) in
+-- -- let _ = printLn "" in
 
--- -- cb
--- let _ = dprintLn ([edgeCB, edgeBA2]) in
--- let _ = dprintLn (get paths 4) in
--- let _ = printLn "" in
+-- -- -- a
+-- -- let _ = dprintLn (get paths 0) in
+-- -- let _ = dprintLn ([edgeBA1]) in
+-- -- let _ = printLn "" in
 
--- -- da
--- let _ = dprintLn [edgeBB, edgeBA1] in
--- let _ = dprintLn (get paths 2) in
--- let _ = printLn "" in
+-- -- -- cb
+-- -- let _ = dprintLn ([edgeCB, edgeBA2]) in
+-- -- let _ = dprintLn (get paths 4) in
+-- -- let _ = printLn "" in
 
--- let _ = dprintLn (get paths 3) in
--- let _ = dprintLn (get paths 5) in
+-- -- -- da
+-- -- let _ = dprintLn [edgeBB, edgeBA1] in
+-- -- let _ = dprintLn (get paths 2) in
+-- -- let _ = printLn "" in
 
-let _ = dprintLn argv in
+-- -- let _ = dprintLn (get paths 3) in
+-- -- let _ = dprintLn (get paths 5) in
+
+-- let _ = dprintLn argv in
 
 ()
