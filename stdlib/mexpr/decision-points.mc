@@ -11,6 +11,8 @@ include "eq.mc"
 
 -- This file contains implementations related to decision points.
 
+-- TODO: version with table as input (no need to recompile)
+
 let _getSym = lam n.
   optionGetOrElse
     (lam _. error "Expected symbol")
@@ -173,7 +175,7 @@ let hole_ = use HoleAst in
 type CallCtxInfo = {
 
   -- Call graph of the program. Functions are nodes, function calls are edges.
-  callGraph: DiGraph Name Name,
+  callGraph: CallGraph,
 
   -- List of public functions of the program (possible entry points in the call
   -- graph)
@@ -201,7 +203,7 @@ let _newNameFromStr : Str -> Name -> Name = lam prefix. lam name.
 let _incVarFromName = _newNameFromStr "inc_"
 
 -- Compute the call context info from a program.
-let callCtxInit : [Name] -> CallGraph Name Name -> Expr -> CallCtxInfo =
+let callCtxInit : [Name] -> CallGraph -> Expr -> CallCtxInfo =
   lam publicFns. lam callGraph. lam tm.
     let fun2inc =
       _nameMapInit (digraphVertices callGraph) identity _incVarFromName
@@ -282,11 +284,6 @@ let callCtxPubLookup : Name -> CallCtxInfo -> Option Name = lam name. lam info.
 -----------------------------
 -- Program transformations --
 -----------------------------
-
--- Type of a function for looking up decision points assignments
--- TODO: What is the best interface for Lookup?
-type Lookup = Name -> [Name] -> Expr
-type Skeleton = Lookup -> Expr
 
 -- The initial value of an incoming variable.
 let _incUndef = 0
@@ -409,35 +406,49 @@ let _forwardCall : Name -> (Expr -> Expr) -> Binding -> (Binding, Binding) =
                             with body = f bind.body}
       in (localFun, {bind with body = _lamWithBody newBody bind.body})
 
+type Lookup = Int -> Expr
+type Table = Map Name (Map [Name] Int)
+type CtxEnv = {info: CallCtxInfo, table: Table, count: Int}
+
+let ctxEnvEmpty : [Name] -> CallGraph -> Expr -> CtxEnv =
+  use Ast2CallGraph in lam public. lam g. lam tm.
+    { info = callCtxInit public g tm,
+    , table = mapEmpty 
+    }
 
 --
 lang ContextAwareHoles = Ast2CallGraph + HoleAst + IntAst + MatchAst + NeverAst
                          -- Included for debugging
                          + MExprPrettyPrint
+  syn Intermediate =
+  | Partial {part: Lookup -> Expr, table: Table}
+  | Complete {prog: Expr, table: Table} -- TODO
 
   -- Find the initial mapping from decision points to values
   -- Returns a function of type 'Lookup'.
-  sem initAssignments =
+  sem initAssignments (table : Table) =
   | tm ->
+    let idsOfHole = lam name.
+      let m = mapFind name table in
+      map (lam t. match t with (k, v) then v else never) (mapBindings m)
+    in
     -- Find the start guess of each decision point
-    recursive let findHoles : [(Name, Expr)] -> Expr -> [(Name, Expr)] =
+    recursive let findHoles : [(Int, Expr)] -> Expr -> [(Int, Expr)] =
       lam acc. lam t.
         match t with TmLet ({body = TmHole {startGuess = startGuess}} & le) then
-          findHoles (cons (le.ident, startGuess) acc) le.inexpr
+          let ids = idsOfHole le.ident in
+          findHoles (concat (map (lam i. (i, startGuess)) ids) acc) le.inexpr
         else
           sfold_Expr_Expr concat acc (smap_Expr_Expr (findHoles acc) t)
     in
-    -- Build a hash map for symbol -> value
+    -- Build a map for int -> value
     let m =
       foldl (lam acc. lam t.
-               hashmapInsert {eq = _eqn, hashfn = _nameHash} t.0 t.1 acc)
-            hashmapEmpty
+               mapInsert t.0 t.1 acc)
+            (mapEmpty subi)
             (findHoles [] tm) in
-    -- Return a lookup function (path is ignored for initial assignment)
-    lam id. lam _path.
-      optionGetOrElse
-        (lam _. error "Lookup failed")
-        (hashmapLookup {eq = _eqn, hashfn = _nameHash} id m)
+    -- Return the lookup function
+    lam i. mapFind i m
 
   -- Transform a program with decision points. Returns a function of type
   -- 'Skeleton'. Applying this function to a lookup function yields an MExpr
@@ -501,17 +512,17 @@ lang ContextAwareHoles = Ast2CallGraph + HoleAst + IntAst + MatchAst + NeverAst
 
   -- Maintain call context history by updating incoming variables before
   -- function calls.
-  sem _maintainCallCtx (lookup : Lookup) (info : CallCtxInfo) (cur : Name) =
+  sem _maintainCallCtx (lookup : Lookup) (env : ContextEnv) (cur : Name) =
   -- Application: caller updates incoming variable of callee
   | TmLet ({ body = TmApp a } & t) ->
-    -- NOTE(Linnea, 2021-01-29): ANF form means no recursion necessary for an
-    -- application node (cannot contain function definitions or calls)
-    let le = TmLet {t with inexpr = _maintainCallCtx lookup info cur t.inexpr} in
+    -- NOTE(Linnea, 2021-01-29): ANF form means no recursion necessary for the
+    -- application node (can only contain values)
+    let le = TmLet {t with inexpr = _maintainCallCtx lookup env cur t.inexpr} in
     match _appGetCallee (TmApp a) with Some callee then
-      match callCtxFunLookup callee info
+      match callCtxFunLookup callee env.info
       with Some iv then
         -- Set the incoming var of callee to current node
-        let count = callCtxLbl2Count t.ident info in
+        let count = callCtxLbl2Count t.ident env.info in
         let update = modref_ (nvar_ iv) (int_ count) in
         bind_ (nulet_ (nameSym "_") update) le
       else le
@@ -519,45 +530,48 @@ lang ContextAwareHoles = Ast2CallGraph + HoleAst + IntAst + MatchAst + NeverAst
 
   -- Decision point: lookup the value depending on call history.
   | TmLet ({ body = TmHole { depth = depth }, ident = ident} & t) ->
-     match info with
+     match env.info with
       { callGraph = callGraph, publicFns = publicFns }
      then
        let paths = eqPaths callGraph cur depth publicFns in
-       let iv = callCtxFun2Inc cur info in
-       let lookupCode = _lookupCallCtx lookup ident iv info paths in
+       let env = _envAddHole ident paths in
+       let iv = callCtxFun2Inc cur env.info in
+       let lookupCode = _lookupCallCtx lookup ident iv env paths in
        TmLet {{t with body = lookupCode}
-                 with inexpr = _maintainCallCtx lookup info cur t.inexpr}
+                 with inexpr = _maintainCallCtx lookup env cur t.inexpr}
      else never
 
   -- Function definitions: possibly update cur inside body of function
   | TmLet ({ body = TmLam lm } & t) ->
     let curBody =
-      match callCtxFunLookup t.ident info with Some _
+      match callCtxFunLookup t.ident env.info with Some _
       then t.ident
       else cur
-    in TmLet {{t with body = _maintainCallCtx lookup info curBody t.body}
-                 with inexpr = _maintainCallCtx lookup info cur t.inexpr}
+    in TmLet {{t with body = _maintainCallCtx lookup env curBody t.body}
+                 with inexpr = _maintainCallCtx lookup env cur t.inexpr}
 
   | TmRecLets ({ bindings = bindings, inexpr = inexpr } & t) ->
     let newBinds =
       map (lam bind.
              match bind with { body = TmLam lm } then
                let curBody =
-                 match callCtxFunLookup bind.ident info with Some _
+                 match callCtxFunLookup bind.ident env.info with Some _
                  then bind.ident
                  else cur
-               in {bind with body = _maintainCallCtx lookup info curBody bind.body}
-             else {bind with body = _maintainCallCtx lookup info cur bind.body})
+               in {bind with body = _maintainCallCtx lookup env curBody bind.body}
+             else {bind with body = _maintainCallCtx lookup env cur bind.body})
       bindings
     in TmRecLets {{t with bindings = newBinds}
-                     with inexpr = _maintainCallCtx lookup info cur inexpr}
+                     with inexpr = _maintainCallCtx lookup env cur inexpr}
   | tm ->
-    smap_Expr_Expr (_maintainCallCtx lookup info cur) tm
+    smap_Expr_Expr (_maintainCallCtx lookup env cur) tm
 end
 
 lang PPrintLang = MExprPrettyPrint + HolePrettyPrint
 
 lang TestLang = MExpr + ContextAwareHoles + PPrintLang + MExprANF + HoleANF
+
+lang MExprHoles = MExpr + ContextAwareHoles + PPrintLang + MExprANF + HoleANF
 
 mexpr
 
@@ -759,6 +773,7 @@ let funA = nameSym "funA" in
 let funB = nameSym "funB" in
 let funC = nameSym "funC" in
 let funD = nameSym "funD" in
+let h = nameSym "h" in
 
 let debug = false in
 
@@ -791,8 +806,8 @@ in
 -- let funC = lam x. funB x false
 -- in ()
 let ast = bindall_ [  nulet_ funA (ulam_ "_"
-                        (bind_ (ulet_ "h" (hole_ (int_ 0) 2))
-                               (var_ "h")))
+                        (bind_ (nulet_ h (hole_ (int_ 0) 2))
+                               (nvar_ h)))
                     , nureclets_add funB
                         (ulam_ "xB"
                           (ulam_ "y" (if_ (var_ "xB")
@@ -842,6 +857,7 @@ let appendToAst = lam ast. lam suffix.
   let ast = bind_ ast suffix in
   let skel = transform [funB, funC] ast in
   let res = skel lookup in
+  let _ = print (expr2str res) in
   res
 in
 
@@ -849,25 +865,53 @@ utest eval { env = [] } (appendToAst ast
   (app_ (nvar_ funC) true_)
 ) with int_ 1 in
 
-utest eval { env = [] } (appendToAst ast
-  (app_ (nvar_ funC) false_)
-) with int_ 2 in
+-- utest eval { env = [] } (appendToAst ast
+--   (app_ (nvar_ funC) false_)
+-- ) with int_ 2 in
 
-utest eval { env = [] } (appendToAst ast
-  (appf2_ (nvar_ funB) true_ true_)
-) with int_ 3 in
+-- utest eval { env = [] } (appendToAst ast
+--   (appf2_ (nvar_ funB) true_ true_)
+-- ) with int_ 3 in
 
-utest eval { env = [] } (appendToAst ast
-  (appf2_ (nvar_ funB) true_ false_)
-) with int_ 5 in
+-- utest eval { env = [] } (appendToAst ast
+--   (appf2_ (nvar_ funB) true_ false_)
+-- ) with int_ 5 in
 
-utest eval { env = [] } (appendToAst ast
-  (appf2_ (nvar_ funB) false_ false_)
-) with int_ 6 in
+-- utest eval { env = [] } (appendToAst ast
+--   (appf2_ (nvar_ funB) false_ false_)
+-- ) with int_ 6 in
 
-utest eval { env = [] } (appendToAst ast
-  (bind_ (nulet_ (nameSym "_") (app_ (nvar_ funC) false_))
-         (appf2_ (nvar_ funB) false_ false_))
-) with int_ 6 in
+-- utest eval { env = [] } (appendToAst ast
+--   (bind_ (nulet_ (nameSym "_") (app_ (nvar_ funC) false_))
+--          (appf2_ (nvar_ funB) false_ false_))
+-- ) with int_ 6 in
+
+-- let paths = eqPaths cg funA 2 [funB, funC] in
+let dprintLn = lam d. let _ = dprint d in printLn "" in
+
+-- -- ca
+-- let _ = dprintLn ([edgeCB, edgeBA1]) in
+-- let _ = dprintLn (get paths 1) in
+-- let _ = printLn "" in
+
+-- -- a
+-- let _ = dprintLn (get paths 0) in
+-- let _ = dprintLn ([edgeBA1]) in
+-- let _ = printLn "" in
+
+-- -- cb
+-- let _ = dprintLn ([edgeCB, edgeBA2]) in
+-- let _ = dprintLn (get paths 4) in
+-- let _ = printLn "" in
+
+-- -- da
+-- let _ = dprintLn [edgeBB, edgeBA1] in
+-- let _ = dprintLn (get paths 2) in
+-- let _ = printLn "" in
+
+-- let _ = dprintLn (get paths 3) in
+-- let _ = dprintLn (get paths 5) in
+
+let _ = dprintLn argv in
 
 ()
