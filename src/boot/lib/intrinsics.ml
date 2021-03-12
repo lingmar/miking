@@ -305,4 +305,8 @@ module Mmap = struct
     end in
     let module MapModule = Map.Make (Ord) in
     MapModule.compare vcmp m1 m2
+
+  let get_cmp_fun mCmpPair =
+    let _, cmp = Obj.obj mCmpPair in
+    fun x y -> Obj.repr (cmp x y)
 end

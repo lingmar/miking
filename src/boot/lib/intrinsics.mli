@@ -158,4 +158,6 @@ module Mmap : sig
   val eq : ('b -> 'b -> bool) -> Obj.t -> Obj.t -> bool
 
   val cmp : ('b -> 'b -> int) -> Obj.t -> Obj.t -> int
+
+  val get_cmp_fun : Obj.t -> (Obj.t -> Obj.t -> Obj.t)
 end

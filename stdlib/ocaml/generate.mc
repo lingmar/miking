@@ -136,6 +136,7 @@ let _mapMapWithKeyName = nameSym "mapMapWithKey"
 let _mapFoldWithKeyName = nameSym "mapFoldWithKey"
 let _mapEqName = nameSym "mapEq"
 let _mapCmpName = nameSym "mapCmp"
+let _mapGetCmpFunName = nameSym "mapGetCmpFun"
 let _tensorCreateName = nameSym "tensorCreate"
 let _tensorGetExnName = nameSym "tensorGetExn"
 let _tensorSetExnName = nameSym "tensorSetExn"
@@ -301,6 +302,11 @@ let _preamble =
     nulams_ args (_objRepr (foldl (lam t. lam a. t (objObjVar a)) op args))
   in
 
+  let mkBodyNoRepr = lam op. lam args.
+    nulams_ args (foldl (lam t. lam a. t (objObjVar a)) op args)
+  in
+
+
   let intr0 = lam name. lam op.
     nulet_ name (mkBody op [])
   in
@@ -309,6 +315,12 @@ let _preamble =
       nulet_ name
         (let a = nameSym "a" in
          mkBody op [a])
+  in
+
+  let intr1NoRepr = lam name. lam op.
+      nulet_ name
+        (let a = nameSym "a" in
+         mkBodyNoRepr op [a])
   in
 
   let intr2 = lam name. lam op.
@@ -422,6 +434,7 @@ let _preamble =
     , intr3 _mapFoldWithKeyName (appf3_ (_mapOp "fold_with_key"))
     , intr3 _mapEqName (appf3_ (_mapOp "eq"))
     , intr3 _mapCmpName (appf3_ (_mapOp "cmp"))
+    , intr1NoRepr _mapGetCmpFunName (appf1_ (_mapOp "get_cmp_fun"))
     ]
 
 lang OCamlObjWrap = MExprAst + OCamlAst
@@ -501,6 +514,7 @@ lang OCamlObjWrap = MExprAst + OCamlAst
   | CMapFoldWithKey _ -> nvar_ _mapFoldWithKeyName
   | CMapEq _ -> nvar_ _mapEqName
   | CMapCmp _ -> nvar_ _mapCmpName
+  | CMapGetCmpFun _ -> nvar_ _mapGetCmpFunName
   | CTensorCreate _ -> nvar_ _tensorCreateName
   | CTensorGetExn _ -> nvar_ _tensorGetExnName
   | CTensorSetExn _ -> nvar_ _tensorSetExnName
@@ -1297,6 +1311,14 @@ let mapCmpNEqTest = bindall_
       (subi_ (var_ "v1") (var_ "v2")))) (var_ "m1") (var_ "m2")
   ] in
 utest ocamlEvalInt (objWrapGenerate mapCmpNEqTest)
+with int_ 1 using eqExpr in
+
+let mapGetCmpFunTest = bindall_
+  [ ulet_ "m" (mapEmpty_ (TmConst {val = CSubi {}}))
+  , ulet_ "cmp" (mapGetCmpFun_ (var_ "m"))
+  , appf2_ (var_ "cmp") (int_ 2) (int_ 1)
+  ] in
+utest ocamlEvalInt (objWrapGenerate mapGetCmpFunTest)
 with int_ 1 using eqExpr in
 
 -- TODO(Linnea, 2020-03-12): Test mapBindings when we have tuple projections.
