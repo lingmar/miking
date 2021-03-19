@@ -760,6 +760,10 @@ lang OCamlObjWrap = MExprAst + OCamlAst
                 with rhs = objWrapRec t.rhs}
   | TmConst {val = c} ->
     intrinsic2name c
+  | TmRecord t ->
+    TmRecord
+      {t with bindings =
+         mapMap (lam expr. _objRepr (objWrapRec expr)) t.bindings}
   | (OTmArray _) & t -> _objRepr (smap_Expr_Expr objWrapRec t)
   | (OTmConApp _) & t -> _objRepr (smap_Expr_Expr objWrapRec t)
   | OTmMatch t ->
