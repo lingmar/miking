@@ -88,7 +88,8 @@ let compile = lam files. lam options.
       in
 
       -- Compile OCaml AST
-      ocamlCompile file ocamlAst
+      ocamlCompile file ocamlAst;
+      dprintLn (deref pprintEnvGetStrTime)
     else never
   in
   iter compileFile files

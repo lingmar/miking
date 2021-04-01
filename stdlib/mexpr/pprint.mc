@@ -31,84 +31,97 @@ let pprintIncr = lam indent. addi indent 2
 type PprintEnv = {
 
   -- Used to keep track of strings assigned to names
-  nameMap: Map Name String,
+  nameMap: Map Name SID,
 
   -- Count the number of occurrences of each (base) string to assist with
   -- assigning unique strings.
-  count: Map String Int,
+  count: Map SID Int,
 
   -- Set of strings currently in use in the environment. Equals the set of
   -- values in 'nameMap'.
   -- OPT(Linnea, 2021-01-27): Maps offer the most efficient lookups as for now.
   -- Could be replaced by an efficient set data structure, were we to have one.
-  strings: Map String Int
+  strings: Map SID Int
 
 }
 
 -- TODO(dlunde,2020-09-29) Make it possible to debug the actual symbols
 
 let pprintEnvEmpty = { nameMap = mapEmpty nameCmp,
-                       count = mapEmpty cmpString,
-                       strings = mapEmpty cmpString }
+                       count = mapEmpty cmpSID,
+                       strings = mapEmpty cmpSID }
 
 -- Definition of a pprint environment including the names of the builtin
 -- functions.
 let builtinPprintNameMap =
-  mapFromList nameCmp (map (lam n. (n, nameGetStr n)) builtinNames)
-let builtinPprintCount = mapMap (lam. 1) builtinNameMap
-let builtinPprintStrings = mapMap (lam. 0) builtinPprintCount
+  mapFromList nameCmp (map (lam n. (n, stringToSid (nameGetStr n))) builtinNames)
+
+let builtinSIDs = map (lam n. stringToSid (nameGetStr n)) builtinNames
+let builtinPprintCount = mapFromList cmpSID (map (lam s. (s, 1)) builtinSIDs)
+let builtinPprintStrings = mapFromList cmpSID (map (lam s. (s, 0)) builtinSIDs)
 let builtinPprintEnv =
   { nameMap = builtinPprintNameMap
   , count = builtinPprintCount
   , strings = builtinPprintStrings
   }
 
+--let v = dprintLn builtinPprintEnv
+
 -- Look up the string associated with a name in the environment
-let pprintEnvLookup : Name -> PprintEnv -> Option String = lam name. lam env.
+let pprintEnvLookup : Name -> PprintEnv -> Option SID = lam name. lam env.
   match env with { nameMap = nameMap } then
     mapLookup name nameMap
   else never
 
 -- Check if a string is free in the environment.
-let pprintEnvFree : String -> PprintEnv -> Bool = lam str. lam env.
+let pprintEnvFree : SID -> PprintEnv -> Bool = lam str. lam env.
   match env with { strings = strings } then
     not (mapMem str strings)
   else never
 
 -- Add a binding to the environment
-let pprintEnvAdd : Name -> String -> Int -> PprintEnv -> PprintEnv =
-  lam name. lam str. lam i. lam env.
+let pprintEnvAdd : Name -> SID -> SID -> Int -> PprintEnv -> PprintEnv =
+  lam name. lam str. lam baseStr. lam i. lam env.
     match env with {nameMap = nameMap, count = count, strings = strings} then
-      let baseStr = nameGetStr name in
       let count = mapInsert baseStr i count in
       let nameMap = mapInsert name str nameMap in
       let strings = mapInsert str 0 strings in
       {nameMap = nameMap, count = count, strings = strings}
     else never
 
+let pprintEnvGetStrTime = ref 0.0
+
 -- Get a string for the current name. Returns both the string and a new
 -- environment.
 let pprintEnvGetStr : PprintEnv -> Name -> (PprintEnv, String) =
   lam env. lam name.
-    match pprintEnvLookup name env with Some str then (env,str)
-    else
-      let baseStr = nameGetStr name in
-      if pprintEnvFree baseStr env then (pprintEnvAdd name baseStr 1 env, baseStr)
+    let t1 = wallTimeMs () in
+    let r =
+      match pprintEnvLookup name env with Some sid then (env,sidToString sid)
       else
-        match env with {count = count} then
-          let start =
-            match mapLookup baseStr count
-            with Some i then i else 1 in
-          recursive let findFree : String -> Int -> (String, Int) =
-            lam baseStr. lam i.
-              let proposal = concat baseStr (int2string i) in
-              if pprintEnvFree proposal env then (proposal, i)
-              else findFree baseStr (addi i 1)
-          in
-          match findFree baseStr start with (str, i) then
-            (pprintEnvAdd name str (addi i 1) env, str)
+        let baseStr = nameGetStr name in
+        let baseSID = stringToSid baseStr in
+        if pprintEnvFree baseSID env then (pprintEnvAdd name baseSID baseSID 1 env, baseStr)
+        else
+          match env with {count = count} then
+            let start =
+              match mapLookup baseSID count
+              with Some i then i else 1 in
+            recursive let findFree : SID -> Int -> (SID, Int) =
+              lam baseSID. lam i.
+                let proposal = concat (sidToString baseSID) (int2string i) in
+                let proposalSID = stringToSid proposal in
+                if pprintEnvFree proposalSID  env then (proposalSID, i)
+                else findFree baseSID (addi i 1)
+            in
+            match findFree baseSID start with (sid, i) then
+              (pprintEnvAdd name sid baseSID (addi i 1) env, sidToString sid)
+            else never
           else never
-        else never
+    in
+    let t2 = wallTimeMs () in
+    modref pprintEnvGetStrTime (addf (deref pprintEnvGetStrTime) (subf t2 t1));
+    r
 
 -- Adds the given name to the environment, if its exact string is not already
 -- mapped to. If the exact string is already mapped to, return None (). This
