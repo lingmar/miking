@@ -1,4 +1,5 @@
 include "ast.mc"
+include "eq.mc"
 include "ast-builder.mc"
 include "info.mc"
 
@@ -10,8 +11,10 @@ include "info.mc"
 -- "ast-builder.mc" includes "ast.mc" though, so we can't use it inside "ast.mc",
 -- thus we create this file instead.
 
+lang TestLang = MExprAst + MExprEq
+
 mexpr
-use MExprAst in
+use TestLang in
 
 let tmVarX = (var_ "x") in
 let tmVarY = (var_ "y") in
@@ -89,7 +92,7 @@ let mkTmRecordXY = lam x. lam y. record_ [("x", x), ("y", y)] in
 let tmRecordI = mkTmRecordXY tmApp11 tmConst3 in
 
 utest smap_Expr_Expr map2varX tmRecordI
-with record_ [("x", tmVarX), ("y", tmVarX)] in
+with record_ [("x", tmVarX), ("y", tmVarX)] using eqExpr in
 
 -- TODO(vipa, 2020-09-24): the best test here would be one that collects all the children to see that we see all of them. The issue is that we shouldn't depend on the enumeration order, so we would like to collect the (multi-)set of children, not a sequence.
 -- We would thus like something like `sfold_Expr_Expr (lam acc. lam c. setInsert c acc) emptySet tmRecordI with setFromList [tmConst3, tmApp11] using setEqual`
@@ -98,9 +101,14 @@ utest sfold_Expr_Expr (lam acc. lam. addi acc 1) 0 tmRecordI with 2 in
 
 let tmRecordUpdate = recordupdate_ tmRecordI "x" tmVarY in
 
-utest smap_Expr_Expr map2varX tmRecordUpdate with recordupdate_ tmVarX "x" tmVarX in
-utest sfold_Expr_Expr fold2seq [] tmRecordUpdate with [tmVarY, tmRecordI] in
+utest smap_Expr_Expr map2varX tmRecordUpdate
+with recordupdate_ tmVarX "x" tmVarX using eqExpr in
 
+match sfold_Expr_Expr fold2seq [] tmRecordUpdate with [x, y] then
+  utest x with tmVarY in
+  utest y with tmRecordI using eqExpr in
+  ()
+else never;
 
 let tmCon = bind_ (ucondef_ "y") tmApp in
 
@@ -174,7 +182,7 @@ let cInt2cChar =
 lam e. match e with TmConst t then
          match t.val with CInt i
            then TmConst {val = CChar {val = int2char i.val},
-                         ty = TyUnknown {}, info = NoInfo()}
+                         ty = tyunknown_, info = NoInfo()}
          else e
        else e
 in
@@ -190,7 +198,7 @@ in
 let countNodes = bottomUp (sfold_Expr_Expr addi 1) in
 
 utest bottomUp identity tmVarX with tmVarX in
-utest bottomUp cInt2cChar tmRecordI with tmRecordC in
+utest bottomUp cInt2cChar tmRecordI with tmRecordC using eqExpr in
 utest countNodes tmVarX with 1 in
 utest countNodes tmApp11C with 3 in
 utest countNodes tmRecordC with 5 in

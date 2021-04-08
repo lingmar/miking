@@ -3,11 +3,13 @@ include "char.mc"
 include "option.mc"
 include "seq.mc"
 include "string.mc"
+include "stringid.mc"
 include "name.mc"
 include "map.mc"
 
 include "mexpr/ast.mc"
 include "mexpr/ast-builder.mc"
+include "mexpr/builtin.mc"
 
 ----------------------------
 -- PRETTY PRINT INDENTING --
@@ -48,6 +50,18 @@ type PprintEnv = {
 let pprintEnvEmpty = { nameMap = mapEmpty nameCmp,
                        count = mapEmpty cmpString,
                        strings = mapEmpty cmpString }
+
+-- Definition of a pprint environment including the names of the builtin
+-- functions.
+let builtinPprintNameMap =
+  mapFromList nameCmp (map (lam n. (n, nameGetStr n)) builtinNames)
+let builtinPprintCount = mapMap (lam. 1) builtinNameMap
+let builtinPprintStrings = mapMap (lam. 0) builtinPprintCount
+let builtinPprintEnv =
+  { nameMap = builtinPprintNameMap
+  , count = builtinPprintCount
+  , strings = builtinPprintStrings
+  }
 
 -- Look up the string associated with a name in the environment
 let pprintEnvLookup : Name -> PprintEnv -> Option String = lam name. lam env.
@@ -129,24 +143,22 @@ let pprintConString = lam str.
 
 -- Get an optional list of tuple expressions for a record. If the record does
 -- not represent a tuple, None () is returned.
-let _record2tuple = lam tm.
-  use RecordAst in
-  match tm with TmRecord t then
-    let keys = assocKeys {eq=eqString} t.bindings in
+let _record2tuple
+  : Map SID a
+  -> Option [a]
+  = lam bindings.
+    let keys = map sidToString (mapKeys bindings) in
     match all stringIsInt keys with false then None () else
     let intKeys = map string2int keys in
     let sortedKeys = sort subi intKeys in
     -- Check if keys are a sequence 0..(n-1)
     match and (eqi 0 (head sortedKeys))
               (eqi (subi (length intKeys) 1) (last sortedKeys)) with true then
-      -- Note: Quadratic complexity. Sorting the association list directly
-      -- w.r.t. key would improve complexity to n*log(n).
-      Some (map (lam key. assocLookupOrElse {eq=eqString}
+      Some (map (lam key. mapLookupOrElse
                             (lam. error "Key not found")
-                            (int2string key) t.bindings)
+                            (stringToSid (int2string key)) bindings)
                  sortedKeys)
     else None ()
-  else error "Not a record"
 
 
 -----------
@@ -175,7 +187,7 @@ lang MExprIdentifierPrettyPrint = IdentifierPrettyPrint
     else never
 
   sem pprintLabelString =
-  | str -> _parserStr str "#label" (lam str. isLowerAlphaOrUnderscore (head str))
+  | sid -> _parserStr (sidToString sid) "#label" (lam str. isLowerAlphaOrUnderscore (head str))
 end
 
 lang PrettyPrint = IdentifierPrettyPrint
@@ -190,8 +202,9 @@ lang PrettyPrint = IdentifierPrettyPrint
   -- Intentionally left blank
 
   sem expr2str =
-  | expr -> match pprintCode 0 pprintEnvEmpty expr with (_,str)
-            then str else never
+  | expr ->
+    match pprintCode 0 builtinPprintEnv expr with (_,str)
+    then str else never
 
   -- Helper function for printing parentheses
   sem printParen (indent : Int) (env: PprintEnv) =
@@ -261,7 +274,7 @@ lang LamPrettyPrint = PrettyPrint + LamAst + UnknownTypeAst
   sem pprintCode (indent : Int) (env: PprintEnv) =
   | TmLam t ->
     match pprintVarName env t.ident with (env,str) then
-      match getTypeStringCode indent env t.ty with (env, ty) then
+      match getTypeStringCode indent env t.tyIdent with (env, ty) then
         let ty = if eqString ty "Unknown" then "" else concat ": " ty in
         match pprintCode (pprintIncr indent) env t.body with (env,body) then
           (env,
@@ -278,9 +291,9 @@ lang RecordPrettyPrint = PrettyPrint + RecordAst
   | TmRecordUpdate _ -> true
 
   sem pprintCode (indent : Int) (env: PprintEnv) =
-  | TmRecord t ->
-    if eqi (length t.bindings) 0 then (env,"{}")
-    else match _record2tuple (TmRecord t) with Some tms then
+  | TmRecord {bindings = bindings} ->
+    if mapIsEmpty bindings then (env,"{}")
+    else match _record2tuple bindings with Some tms then
       match mapAccumL (lam env. lam e. pprintCode indent env e) env tms
       with (env,tupleExprs) then
         let merged = match tupleExprs with [e] then
@@ -291,16 +304,16 @@ lang RecordPrettyPrint = PrettyPrint + RecordAst
     else
       let innerIndent = pprintIncr (pprintIncr indent) in
       match
-        assocMapAccum {eq=eqString}
+        mapMapAccum
           (lam env. lam k. lam v.
              match pprintCode innerIndent env v with (env, str) then
                (env,
                 join [pprintLabelString k, " =", pprintNewline innerIndent,
                       str])
              else never)
-           env t.bindings
+           env bindings
       with (env, bindMap) then
-        let binds = assocValues {eq=eqString} bindMap in
+        let binds = mapValues bindMap in
         let merged =
           strJoin (concat "," (pprintNewline (pprintIncr indent))) binds
         in
@@ -361,14 +374,14 @@ lang TypePrettyPrint = PrettyPrint + TypeAst + UnknownTypeAst
     match pprintEnvGetStr env t.ident with (env,str) then
       let ident = str in -- TODO(dlunde,2020-11-24): change to pprintTypeName
       match pprintCode indent env t.inexpr with (env,inexpr) then
-        match getTypeStringCode indent env t.ty with (env, ty) then
-          match t.ty with TyUnknown{} then
+        match getTypeStringCode indent env t.tyIdent with (env, tyIdent) then
+          match t.tyIdent with TyUnknown _ then
             (env, join ["type ", ident, pprintNewline indent,
                          "in", pprintNewline indent,
                          inexpr])
           else
             (env, join ["type ", ident, " =", pprintNewline (pprintIncr indent),
-                      ty, pprintNewline indent,
+                      tyIdent, pprintNewline indent,
                       "in", pprintNewline indent,
                       inexpr])
         else never
@@ -400,6 +413,7 @@ lang RecLetsPrettyPrint = PrettyPrint + RecLetsAst + UnknownTypeAst
     in
     match mapAccumL f env t.bindings with (env,bindings) then
       match pprintCode indent env t.inexpr with (env,inexpr) then
+        match bindings with [] then (env, inexpr) else
         let bindings = strJoin (pprintNewline ii) bindings in
         (env,join ["recursive", pprintNewline ii,
                    bindings, pprintNewline i,
@@ -431,7 +445,7 @@ lang DataPrettyPrint = PrettyPrint + DataAst + UnknownTypeAst
   sem pprintCode (indent : Int) (env: PprintEnv) =
   | TmConDef t ->
     match pprintConName env t.ident with (env,str) then
-      match getTypeStringCode indent env t.ty with (env, ty) then
+      match getTypeStringCode indent env t.tyIdent with (env, ty) then
         let ty = if eqString ty "Unknown" then "" else concat ": " ty in
         match pprintCode indent env t.inexpr with (env,inexpr) then
           (env,join ["con ", str, ty, " in", pprintNewline indent, inexpr])
@@ -455,7 +469,10 @@ lang MatchPrettyPrint = PrettyPrint + MatchAst
   -- intentionally left blank
 
   sem pprintCode (indent : Int) (env: PprintEnv) =
-  | TmMatch t ->
+  | TmMatch t -> pprintTmMatchNormally indent env t
+
+  sem pprintTmMatchNormally (indent : Int) (env: PprintEnv) =
+  | t ->
     let i = indent in
     let ii = pprintIncr indent in
     match pprintCode ii env t.target with (env,target) then
@@ -470,6 +487,27 @@ lang MatchPrettyPrint = PrettyPrint + MatchAst
         else never
       else never
     else never
+end
+
+lang RecordProjectionSyntaxSugarPrettyPrint = MatchPrettyPrint + RecordPat + NeverAst + NamedPat + VarAst
+  sem pprintCode (indent : Int) (env: PprintEnv) =
+  | TmMatch (t &
+    { pat = PatRecord
+      { bindings = bindings
+      }
+    , thn = TmVar {ident = exprName}
+    , els = TmNever _
+    , target = expr
+    })
+  -> match mapBindings bindings with [(fieldLabel, PatNamed {ident = PName patName})]
+    then
+      if nameEq patName exprName
+      then
+        match printParen indent env expr with (env, expr) then
+          (env, join [expr, ".", pprintLabelString fieldLabel])
+        else never
+      else pprintTmMatchNormally indent env t
+    else pprintTmMatchNormally indent env t
 end
 
 lang UtestPrettyPrint = PrettyPrint + UtestAst
@@ -515,14 +553,6 @@ lang SeqPrettyPrint = PrettyPrint + SeqAst + ConstPrettyPrint + CharAst
     else never
 end
 
-lang RefPrettyPrint = PrettyPrint + RefAst
-  sem isAtomic =
-  | TmRef _ -> true
-
-  sem pprintCode (indent : Int) (env : PprintEnv) =
-  | TmRef _ -> (env, "(ref)")
-end
-
 lang NeverPrettyPrint = PrettyPrint + NeverAst
   sem isAtomic =
   | TmNever _ -> true
@@ -547,6 +577,9 @@ lang ArithIntPrettyPrint = ArithIntAst + ConstPrettyPrint
   | CAddi _ -> "addi"
   | CSubi _ -> "subi"
   | CMuli _ -> "muli"
+  | CModi _ -> "modi"
+  | CDivi _ -> "divi"
+  | CNegi _ -> "negi"
 end
 
 lang FloatPrettyPrint = FloatAst + ConstPrettyPrint
@@ -582,7 +615,17 @@ end
 
 lang CharPrettyPrint = CharAst + ConstPrettyPrint
   sem getConstStringCode (indent : Int) =
+  | CChar {val = '\n'} -> "\\n"
+  | CChar {val = '\t'} -> "\\t"
+  | CChar {val = '\\'} -> "\\\\"
+  | CChar {val = '\''} -> "\\'"
+  | CChar {val = '\"'} -> "\\\""
   | CChar c -> ['\'', c.val, '\'']
+end
+
+lang CmpCharPrettyPrint = CmpCharAst + ConstPrettyPrint
+  sem getConstStringCode (indent : Int) =
+  | CEqc _ -> "eqc"
 end
 
 lang SymbPrettyPrint = SymbAst + ConstPrettyPrint
@@ -613,6 +656,55 @@ lang RefOpPrettyPrint = RefOpAst + ConstPrettyPrint
   | CRef _ -> "ref"
   | CModRef _ -> "modref"
   | CDeRef _ -> "deref"
+end
+
+lang SysPrettyPrint = SysAst + ConstPrettyPrint
+  sem getConstStringCode (indent : Int) =
+  | CExit _ -> "exit"
+  | CError _ -> "error"
+  | CArgv _ -> "argv"
+end
+
+lang TensorOpPrettyPrint = TensorOpAst + ConstPrettyPrint
+  sem getConstStringCode (indent : Int) =
+  | CTensorCreate _ -> "tensorCreate"
+  | CTensorGetExn _ -> "tensorGetExn"
+  | CTensorSetExn _ -> "tensorSetExn"
+  | CTensorRank _ -> "tensorRank"
+  | CTensorShape _ -> "tensorShape"
+  | CTensorReshapeExn _ -> "tensorReshapeExn"
+  | CTensorCopyExn _ -> "tensorCopyExn"
+  | CTensorSliceExn _ -> "tensorSliceExn"
+  | CTensorSubExn _ -> "tensorSubExn"
+  | CTensorIteri _ -> "tensorIteri"
+end
+
+lang MapPrettyPrint = MapAst + ConstPrettyPrint
+  sem getConstStringCode (indent : Int) =
+  | CMapEmpty _ -> "mapEmpty"
+  | CMapInsert _ -> "mapInsert"
+  | CMapRemove _ -> "mapRemove"
+  | CMapFindWithExn _ -> "mapFind"
+  | CMapFindOrElse _ -> "mapFindOrElse"
+  | CMapFindApplyOrElse _ -> "mapFindApplyOrElse"
+  | CMapBindings _ -> "mapBindings"
+  | CMapSize _ -> "mapSize"
+  | CMapMem _ -> "mapMem"
+  | CMapAny _ -> "mapAny"
+  | CMapMap _ -> "mapMap"
+  | CMapMapWithKey _ -> "mapMapWithKey"
+  | CMapFoldWithKey _ -> "mapFoldWithKey"
+  | CMapEq _ -> "mapEq"
+  | CMapCmp _ -> "mapCmp"
+  | CMapGetCmpFun _ -> "mapGetCmpFun"
+end
+
+lang IOPrettyPrint = IOAst + ConstPrettyPrint
+  sem getConstStringCode (indent : Int) =
+  | CPrint _ -> "print"
+  | CDPrint _ -> "dprint"
+  | CReadLine _ -> "readLine"
+  | CReadBytesAsString _ -> "readBytesAsString"
 end
 
 --------------
@@ -678,15 +770,25 @@ lang RecordPatPrettyPrint = RecordPat + IdentifierPrettyPrint
 
   sem getPatStringCode (indent : Int) (env: PprintEnv) =
   | PatRecord {bindings = bindings} ->
-    match
-      assocMapAccum {eq=eqString}
+    if mapIsEmpty bindings then (env, "{}")
+    else match _record2tuple bindings with Some pats then
+      match mapAccumL (lam env. lam e. getPatStringCode indent env e) env pats
+      with (env, tuplePats) then
+        let merged =
+          match tuplePats with [e]
+          then concat e ","
+          else strJoin ", " tuplePats in
+        (env, join ["(", merged, ")"])
+      else never
+    else match
+      mapMapAccum
         (lam env. lam k. lam v.
            match getPatStringCode indent env v with (env,str) then
              (env,join [pprintLabelString k, " = ", str])
            else never)
          env bindings
     with (env,bindMap) then
-      (env,join ["{", strJoin ", " (assocValues {eq=eqString} bindMap), "}"])
+      (env,join ["{", strJoin ", " (mapValues bindMap), "}"])
     else never
 end
 
@@ -816,9 +918,9 @@ end
 lang RecordTypePrettyPrint = RecordTypeAst
   sem getTypeStringCode (indent : Int) (env: PprintEnv) =
   | TyRecord t ->
-    if eqi (assocLength t.fields) 0 then (env,"()") else
+    if mapIsEmpty t.fields then (env,"()") else
       let tuple =
-        let seq = assoc2seq {eq=eqString} t.fields in
+        let seq = map (lam b. (sidToString b.0, b.1)) (mapBindings t.fields) in
         if all (lam t. stringIsInt t.0) seq then
           let seq = map (lam t. (string2int t.0, t.1)) seq in
           let seq = sort (lam l. lam r. subi l.0 r.0) seq in
@@ -837,8 +939,9 @@ lang RecordTypePrettyPrint = RecordTypeAst
         else never
       else
         let f = lam env. lam. lam v. getTypeStringCode indent env v in
-        match assocMapAccum {eq=eqString} f env t.fields with (env, fields) then
-          let fields = assoc2seq {eq=eqString} fields in
+        match mapMapAccum f env t.fields with (env, fields) then
+          let fields =
+            map (lam b. (sidToString b.0, b.1)) (mapBindings fields) in
           let conventry = lam entry. join [entry.0, ": ", entry.1] in
           (env,join ["{", strJoin ", " (map conventry fields), "}"])
         else never
@@ -846,8 +949,9 @@ end
 
 lang VariantTypePrettyPrint = VariantTypeAst
   sem getTypeStringCode (indent : Int) (env: PprintEnv) =
-  | TyVariant {constrs = []} -> (env,"<>")
-  | TyVariant t -> error "Printing of non-empty variant types not yet supported"
+  | TyVariant t ->
+    if eqi (mapLength t.constrs) 0 then (env,"<>")
+    else error "Printing of non-empty variant types not yet supported"
 end
 
 lang VarTypePrettyPrint = VarTypeAst
@@ -878,13 +982,14 @@ lang MExprPrettyPrint =
   VarPrettyPrint + AppPrettyPrint + LamPrettyPrint + RecordPrettyPrint +
   LetPrettyPrint + TypePrettyPrint + RecLetsPrettyPrint + ConstPrettyPrint +
   DataPrettyPrint + MatchPrettyPrint + UtestPrettyPrint + SeqPrettyPrint +
-  NeverPrettyPrint + RefPrettyPrint +
+  NeverPrettyPrint +
 
   -- Constants
   IntPrettyPrint + ArithIntPrettyPrint + FloatPrettyPrint +
   ArithFloatPrettyPrint + BoolPrettyPrint + CmpIntPrettyPrint +
-  CmpFloatPrettyPrint + CharPrettyPrint + SymbPrettyPrint + CmpSymbPrettyPrint
-  + SeqOpPrettyPrint + RefOpPrettyPrint +
+  CmpFloatPrettyPrint + CharPrettyPrint + CmpCharPrettyPrint +
+  SymbPrettyPrint + CmpSymbPrettyPrint + SeqOpPrettyPrint + RefOpPrettyPrint +
+  TensorOpPrettyPrint + MapPrettyPrint + SysPrettyPrint + IOPrettyPrint +
 
   -- Patterns
   NamedPatPrettyPrint + SeqTotPatPrettyPrint + SeqEdgePatPrettyPrint +
@@ -900,6 +1005,9 @@ lang MExprPrettyPrint =
 
   -- Identifiers
   + MExprIdentifierPrettyPrint
+
+  -- Syntactic Sugar
+  + RecordProjectionSyntaxSugarPrettyPrint
 
 end
 
@@ -931,11 +1039,11 @@ let concat_ = appf2_ (var_ "concat") in
 -- in
 let func_foo =
   ulet_ "foo" (
-    lam_ "a" (TyUnknown {}) (
-      lam_ "b" (TyUnknown {}) (
+    lam_ "a" tyunknown_ (
+      lam_ "b" tyunknown_ (
         bindall_ [
           ulet_ "bar" (
-            lam_ "x" (TyUnknown {}) (
+            lam_ "x" tyunknown_ (
               addi_ (var_ "b") (var_ "x")
             )
           ),
@@ -979,13 +1087,13 @@ in
 -- in
 let funcs_evenodd =
     ureclets_add "even"
-        (lam_ "x" (TyUnknown {})
+        (lam_ "x" tyunknown_
             (if_ (eqi_ (var_ "x") (int_ 0))
                  (true_)
                  (not_ (app_ (var_ "odd")
                              (subi_ (var_ "x") (int_ 1))))))
     (ureclets_add "odd"
-        (lam_ "x" (TyUnknown {})
+        (lam_ "x" tyunknown_
             (if_ (eqi_ (var_ "x") (int_ 1))
                  (true_)
                  (not_ (app_ (var_ "even")
@@ -1004,7 +1112,7 @@ in
 
 -- let recconcs = lam rec. lam s. {rec with s = concat rec.s s} in
 let func_recconcs =
-    ulet_ "recconcs" (lam_ "rec" (TyUnknown {}) (lam_ "s" (tystr_) (
+    ulet_ "recconcs" (lam_ "rec" tyunknown_ (lam_ "s" (tystr_) (
         recordupdate_ (var_ "rec")
                       "s"
                       (concat_ (recordproj_ "s" (var_ "rec"))
@@ -1124,9 +1232,9 @@ let sample_ast =
   ]
 in
 
--- let _ = print "\n\n" in
--- let _ = print (expr2str sample_ast) in
--- let _ = print "\n\n" in
+-- print "\n\n";
+-- print (expr2str sample_ast);
+-- print "\n\n";
 
 utest length (expr2str sample_ast) with 0 using geqi in
 

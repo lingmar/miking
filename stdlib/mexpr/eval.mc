@@ -18,7 +18,7 @@ include "mexpr/pprint.mc"
 
 type Symbol = Int
 
-type Env = AssocMap Name Expr
+type Env = Map Name Expr
 
 let _eqn =
   lam n1. lam n2.
@@ -26,9 +26,6 @@ let _eqn =
       nameEqSym n1 n2
     else
       error "Found name without symbol in eval. Did you run symbolize?"
-
-let _evalLookup = assocLookup {eq = _eqn}
-let _evalInsert = assocInsert {eq = _eqn}
 
 -------------
 -- HELPERS --
@@ -49,7 +46,7 @@ let dtupleproj_ = use MExprAst in
 let _seqOfCharToString = use MExprAst in
   lam tms.
     let f = lam c.
-      match c with TmConst {val = CChar c, info = NoInfo()} then
+      match c with TmConst {val = CChar c} then
         c.val
       else error "Not a character"
     in
@@ -65,10 +62,10 @@ lang FixAst = LamAst
   | TmFix ()
 end
 
-lang VarEval = VarAst + IdentifierPrettyPrint + FixAst + AppAst
+lang VarEval = VarAst + FixAst + AppAst
   sem eval (ctx : {env : Env}) =
   | TmVar {ident = ident} ->
-    match _evalLookup ident ctx.env with Some t then
+    match mapLookup ident ctx.env with Some t then
       match t with TmApp {lhs = TmFix _} then
         eval ctx t
       else t
@@ -89,7 +86,7 @@ lang LamEval = LamAst + VarEval + AppEval
   | TmClos {ident : Name, body : Expr, env : Env}
 
   sem apply (ctx : {env : Env}) (arg : Expr) =
-  | TmClos t -> eval {ctx with env = _evalInsert t.ident arg t.env} t.body
+  | TmClos t -> eval {ctx with env = mapInsert t.ident arg t.env} t.body
 
   sem eval (ctx : {env : Env}) =
   | TmLam t -> TmClos {ident = t.ident, body = t.body, env = ctx.env, info = NoInfo()}
@@ -99,7 +96,7 @@ end
 lang LetEval = LetAst + VarEval
   sem eval (ctx : {env : Env}) =
   | TmLet t ->
-    eval {ctx with env = _evalInsert t.ident (eval ctx t.body) ctx.env}
+    eval {ctx with env = mapInsert t.ident (eval ctx t.body) ctx.env}
       t.inexpr
 end
 
@@ -110,9 +107,9 @@ lang FixEval = FixAst + LamEval + UnknownTypeAst
       let ident = clos.ident in
       let body = clos.body in
       let env =
-        _evalInsert ident (TmApp {lhs = TmFix (),
+        mapInsert ident (TmApp {lhs = TmFix (),
                                   rhs = TmClos clos,
-                                  ty = TyUnknown {},
+                                  ty = tyunknown_,
                                   info = NoInfo()}) clos.env in
       eval {ctx with env = env} body
     else
@@ -125,20 +122,19 @@ lang FixEval = FixAst + LamEval + UnknownTypeAst
 lang RecordEval = RecordAst
   sem eval (ctx : {env : Env}) =
   | TmRecord t ->
-    let bs = assocMap {eq=eqString} (eval ctx) t.bindings in
+    let bs = mapMap (eval ctx) t.bindings in
     TmRecord {t with bindings = bs}
   | TmRecordUpdate u ->
     match eval ctx u.rec with TmRecord t then
-      if assocMem {eq = eqString} u.key t.bindings then
-        TmRecord {t with bindings = assocInsert {eq = eqString}
-                                u.key (eval ctx u.value) t.bindings}
+      if mapMem u.key t.bindings then
+        TmRecord {t with bindings = mapInsert u.key (eval ctx u.value) t.bindings}
       else error "Key does not exist in record"
     else error "Not updating a record"
 end
 
 lang RecLetsEval =
   RecLetsAst + VarEval + FixAst + FixEval + RecordEval + LetEval +
-  UnknownTypeAst 
+  UnknownTypeAst
 
   sem eval (ctx : {env : Env}) =
   | TmRecLets t ->
@@ -150,41 +146,41 @@ lang RecLetsEval =
                  ["a", "b", "c"]
     with "0a1b2c" in
     let eta_name = nameSym "eta" in
-    let eta_var = TmVar {ident = eta_name, ty = TyUnknown{}, info = NoInfo()} in
+    let eta_var = TmVar {ident = eta_name, ty = tyunknown_, info = NoInfo()} in
     let unpack_from = lam var. lam body.
       foldli
         (lam i. lam bodyacc. lam binding.
           TmLet {ident = binding.ident,
-                 tyBody = TyUnknown {},
+                 tyBody = tyunknown_,
                  body = TmLam {ident = eta_name,
                                body = TmApp {lhs = dtupleproj_ i var,
                                              rhs = eta_var,
-                                             ty = TyUnknown(),
+                                             ty = tyunknown_,
                                              info = NoInfo()},
-                               tyBody = TyUnknown {},
-                               ty = TyUnknown {},
+                               tyIdent = tyunknown_,
+                               ty = tyunknown_,
                                info = NoInfo()
                                },
                  inexpr = bodyacc,
-                 ty = TyUnknown {},
+                 ty = tyunknown_,
                  info = NoInfo()}
         )
         body
         t.bindings in
     let lst_name = nameSym "lst" in
     let lst_var = TmVar {ident = lst_name,
-                         ty = TyUnknown {},
+                         ty = tyunknown_,
                          info = NoInfo()} in
     let func_tuple = tuple_ (map (lam x. x.body) t.bindings) in
     let unfixed_tuple = TmLam {ident = lst_name,
                                body = unpack_from lst_var func_tuple,
-                               tyBody = TyUnknown {},
-                               ty = TyUnknown {},
+                               tyIdent = tyunknown_,
+                               ty = tyunknown_,
                                info = NoInfo()} in
     eval {ctx with env =
-            _evalInsert lst_name (TmApp {lhs = TmFix (),
+            mapInsert lst_name (TmApp {lhs = TmFix (),
                                          rhs = unfixed_tuple,
-                                         ty = TyUnknown {},
+                                         ty = tyunknown_,
                                          info = NoInfo()})
             ctx.env}
          (unpack_from lst_var t.inexpr)
@@ -198,8 +194,13 @@ lang ConstEval = ConstAst + SysAst + SeqAst + UnknownTypeAst
 
   sem eval (ctx : {env : Env}) =
   | TmConst {val = CArgv {}} ->
-    TmSeq {tms = map str_ argv, ty = TyUnknown {}, info = NoInfo()}
+    TmSeq {tms = map str_ argv, ty = tyunknown_, info = NoInfo()}
   | TmConst c -> TmConst c
+end
+
+lang TypeEval = TypeAst
+  sem eval (ctx : {env : Env}) =
+  | TmType t -> eval ctx t.inexpr
 end
 
 lang DataEval = DataAst + AppEval
@@ -212,7 +213,7 @@ lang MatchEval = MatchAst
   sem eval (ctx : {env : Env}) =
   | TmMatch t ->
     match tryMatch ctx.env (eval ctx t.target) t.pat with Some newEnv then
-      eval {ctx with env = concat newEnv ctx.env} t.thn
+      eval {ctx with env = newEnv} t.thn
     else eval ctx t.els
 
   sem tryMatch (env : Env) (t : Expr) =
@@ -227,7 +228,12 @@ lang UtestEval = Eq + UtestAst
   | TmUtest t ->
     let v1 = eval ctx t.test in
     let v2 = eval ctx t.expected in
-    if eqExpr v1 v2 then print "Test passed\n" else print "Test failed\n";
+    let tusing = optionMap (eval ctx) t.tusing in
+    let result = match tusing with Some tusing then
+      tusing v1 v2
+    else
+      eqExpr v1 v2 in
+    if result then print "Test passed\n" else print "Test failed\n";
     eval ctx t.next
 end
 
@@ -242,9 +248,26 @@ lang NeverEval = NeverAst
   --TODO(?,?)
 end
 
-lang RefEval = RefAst
+-- TODO (oerikss, 2020-03-26): Eventually, this should be a rank 0 tensor.
+lang RefEval
+  syn Expr =
+  | TmRef {ref : Ref}
+
   sem eval (ctx : {env : Env}) =
   | TmRef r -> TmRef r
+end
+
+type T
+con TInt : Tensor Int -> T
+con TFloat : Tensor Float -> T
+con TExpr : Tensor Expr -> T
+
+lang TensorEval
+  syn Expr =
+  | TmTensor { val : T }
+
+  sem eval (ctx : {env : Env}) =
+  | TmTensor t -> TmTensor t
 end
 
 ---------------
@@ -583,8 +606,10 @@ end
 lang SymbEval = SymbAst + IntAst + RecordAst + ConstEval
   sem delta (arg : Expr) =
   | CGensym _ ->
-    match arg with TmRecord {bindings = []} then
-      TmConst {val = CSymb {val = gensym ()}, ty = TyUnknown {}, info = NoInfo()}
+    match arg with TmRecord {bindings = bindings} then
+      if mapIsEmpty bindings then
+        TmConst {val = CSymb {val = gensym ()}, ty = tyunknown_, info = NoInfo()}
+      else error "Argument in gensym is not unit"
     else error "Argument in gensym is not unit"
   | CSym2hash _ ->
     match arg with TmConst (t & {val = CSymb s}) then
@@ -617,11 +642,13 @@ lang SeqOpEval = SeqOpAst + IntAst + BoolAst + ConstEval
   | CConcat2 [Expr]
   | CSplitAt2 [Expr]
   | CCreate2 Int
+  | CSubsequence2 [Expr]
+  | CSubsequence3 ([Expr], Int)
 
   sem delta (arg : Expr) =
   | CGet _ ->
     match arg with TmSeq s then
-      TmConst {val = CGet2 s.tms, ty = TyUnknown {}, info = NoInfo()}
+      TmConst {val = CGet2 s.tms, ty = tyunknown_, info = NoInfo()}
     else error "Not a get of a constant sequence"
   | CGet2 tms ->
     match arg with TmConst {val = CInt {val = n}} then
@@ -629,58 +656,290 @@ lang SeqOpEval = SeqOpAst + IntAst + BoolAst + ConstEval
     else error "n in get is not a number"
   | CSet _ ->
     match arg with TmSeq s then
-      TmConst {val = CSet2 s.tms, ty = TyUnknown {}, info = NoInfo()}
+      TmConst {val = CSet2 s.tms, ty = tyunknown_, info = NoInfo()}
     else error "Not a set of a constant sequence"
   | CSet2 tms ->
     match arg with TmConst {val = CInt {val = n}} then
-      TmConst {val = CSet3 (tms, n), ty = TyUnknown {}, info = NoInfo()}
+      TmConst {val = CSet3 (tms, n), ty = tyunknown_, info = NoInfo()}
     else error "n in set is not a number"
   | CSet3 (tms,n) ->
-    TmSeq {tms = set tms n arg, ty = TyUnknown {}, info = NoInfo()}
+    TmSeq {tms = set tms n arg, ty = tyunknown_, info = NoInfo()}
   | CCons _ ->
-    TmConst {val = CCons2 arg, ty = TyUnknown {}, info = NoInfo()}
+    TmConst {val = CCons2 arg, ty = tyunknown_, info = NoInfo()}
   | CCons2 tm ->
     match arg with TmSeq s then
       TmSeq {s with tms = cons tm s.tms}
     else error "Not a cons of a constant sequence"
   | CSnoc _ ->
     match arg with TmSeq s then
-      TmConst {val = CSnoc2 s.tms, ty = TyUnknown {}, info = NoInfo()}
+      TmConst {val = CSnoc2 s.tms, ty = tyunknown_, info = NoInfo()}
     else error "Not a snoc of a constant sequence"
   | CSnoc2 tms ->
-    TmSeq {tms = snoc tms arg, ty = TyUnknown {}, info = NoInfo()}
+    TmSeq {tms = snoc tms arg, ty = tyunknown_, info = NoInfo()}
   | CConcat _ ->
     match arg with TmSeq s then
-      TmConst {val = CConcat2 s.tms, ty = TyUnknown {}, info = NoInfo()}
+      TmConst {val = CConcat2 s.tms, ty = tyunknown_, info = NoInfo()}
     else error "Not a concat of a constant sequence"
   | CConcat2 tms ->
     match arg with TmSeq s then
-      TmSeq {tms = concat tms s.tms, ty = TyUnknown {}, info = NoInfo()}
+      TmSeq {tms = concat tms s.tms, ty = tyunknown_, info = NoInfo()}
     else error "Not a concat of a constant sequence"
   | CLength _ ->
     match arg with TmSeq s then
-      TmConst {val = CInt {val = length s.tms}, ty = TyUnknown {}, info = NoInfo()}
+      TmConst {val = CInt {val = length s.tms}, ty = tyunknown_, info = NoInfo()}
     else error "Not length of a constant sequence"
   | CReverse _ ->
     match arg with TmSeq s then
-      TmSeq {tms = reverse s.tms, ty = TyUnknown {}, info = NoInfo()}
+      TmSeq {tms = reverse s.tms, ty = tyunknown_, info = NoInfo()}
     else error "Not reverse of a constant sequence"
   | CSplitAt _ ->
     match arg with TmSeq s then
-      TmConst {val = CSplitAt2 s.tms, ty = TyUnknown {}, info = NoInfo()}
+      TmConst {val = CSplitAt2 s.tms, ty = tyunknown_, info = NoInfo()}
     else error "Not splitAt of a constant sequence"
   | CSplitAt2 tms ->
-    match arg with TmConst {val = CInt {val = n}, ty = TyUnknown {}, info = NoInfo()} then
+    match arg with TmConst {val = CInt {val = n}} then
       let t = splitAt tms n in
       tuple_ [seq_ t.0, seq_ t.1]
     else error "n in splitAt is not a number"
   | CCreate _ ->
     match arg with TmConst {val = CInt {val = n}} then
-      TmConst {val = CCreate2 n, ty = TyUnknown {}, info = NoInfo()}
+      TmConst {val = CCreate2 n, ty = tyunknown_, info = NoInfo()}
     else error "n in create is not a number"
   | CCreate2 n ->
-    let f = lam i. eval {env = assocEmpty} (app_ arg (int_ i)) in
-    TmSeq {tms = create n f, ty = TyUnknown {}, info = NoInfo()}
+    let f = lam i. eval {env = builtinEnv} (app_ arg (int_ i)) in
+    TmSeq {tms = create n f, ty = tyunknown_, info = NoInfo()}
+  | CSubsequence _ ->
+    match arg with TmSeq s then
+      TmConst {val = CSubsequence2 s.tms, ty = tyunknown_, info = NoInfo()}
+    else error "Not subsequence of a constant sequence"
+  | CSubsequence2 tms ->
+    match arg with TmConst ({val = CInt {val = i}} & t) then
+      TmConst {t with val = CSubsequence3 (tms, i)}
+    else error "Second argument to subsequence not a number"
+  | CSubsequence3 (tms,offset) ->
+    match arg with TmConst ({val = CInt {val = len}} & t) then
+      TmSeq {tms = subsequence tms offset len, ty = tyunknown_, info = NoInfo()}
+    else error "Third argument to subsequence not a number"
+end
+
+lang TensorOpEval = TensorOpAst + SeqAst + IntAst + FloatAst + TensorEval + ConstEval
+  syn Const =
+  | CTensorCreate2 [Int]
+  | CTensorGetExn2 T
+  | CTensorSetExn2 T
+  | CTensorSetExn3 (T, [Int])
+  | CTensorReshapeExn2 T
+  | CTensorCopyExn2 T
+  | CTensorSliceExn2 T
+  | CTensorSubExn2 T
+  | CTensorSubExn3 (T, Int)
+  | CTensorIteri2 Expr
+
+  sem _ofTmSeq =
+  | TmSeq { tms = tms } ->
+    map (lam tm. match tm with TmConst { val = CInt { val = n }} then n
+                 else error "Not an integer sequence")
+        tms
+  | tm -> dprint tm; error "Not an integer sequence"
+
+  sem _toTmSeq =
+  | is ->
+    let tms = map (lam i. int_ i) is in
+    seq_ tms
+
+  sem apply (ctx : {env : Env}) (arg : Expr) =
+  | TmConst { val = CTensorCreate2 shape } ->
+    let is0 = create (length shape) (lam. 0) in -- First index
+
+    -- Value when applying f to the first index. This determines the type of
+    -- the tensor.
+    let res0 = apply ctx (_toTmSeq is0) arg in
+
+    -- The structure of f is reusable for all types of tensors.
+    let mkf = lam resf. lam x0. lam is.
+      if eqSeq eqi is is0 then x0
+      else
+        let res = apply ctx (_toTmSeq is) arg in
+        resf res
+    in
+
+    match res0 with TmConst { val = CInt { val = n0 } } then
+      let resf = lam res.
+          match res with TmConst { val = CInt { val = n } } then n
+          else error "Expected integer from f in CTensorCreate"
+      in
+      let f = mkf resf n0 in
+      TmTensor { val = TInt (tensorCreate shape f) }
+    else match res0 with TmConst { val = CFloat { val = r0 } } then
+      let resf = lam res.
+          match res with TmConst { val = CFloat { val = r } } then r
+          else error "Expected float from f in CTensorCreate"
+      in
+      let f = mkf resf r0 in
+      TmTensor { val = TFloat (tensorCreate shape f) }
+    else
+      let f = mkf (lam x. x) res0 in
+      TmTensor { val = TExpr (tensorCreate shape f) }
+  | TmConst { val = CTensorIteri2 f } ->
+    match arg with TmTensor { val = t } then
+
+      let mkg = lam mkt. lam i. lam r.
+        let res =
+          apply ctx (TmTensor { val = mkt r })  (apply ctx (int_ i) f)
+        in
+        ()
+      in
+
+      match t with TInt t then
+        let g = mkg (lam t. TInt t) in
+        tensorIteri g t;
+        unit_
+      else match t with TFloat t then
+        let g = mkg (lam t. TFloat t) in
+        tensorIteri g t;
+        unit_
+      else match t with TExpr t then
+        let g = mkg (lam t. TExpr t) in
+        tensorIteri g t;
+        unit_
+      else never
+    else error "Second argument to CTensorIteri not a tensor"
+
+  sem delta (arg : Expr) =
+  | CTensorCreate _ ->
+    let val = CTensorCreate2 (_ofTmSeq arg) in
+    const_ val
+  | CTensorGetExn _ ->
+    match arg with TmTensor { val = t } then
+      let val = CTensorGetExn2 t in
+      const_ val
+    else error "First argument to CTensorGetExn not a tensor"
+  | CTensorGetExn2 t ->
+    let is = _ofTmSeq arg in
+    match t with TInt t then
+      let val = tensorGetExn t is in
+      int_ val
+    else match t with TFloat t then
+      let val = tensorGetExn t is in
+      float_ val
+    else match t with TExpr t then
+      let val = tensorGetExn t is in
+      val
+    else never
+  | CTensorSetExn _ ->
+    match arg with TmTensor { val = t } then
+      let val = CTensorSetExn2 t in
+      const_ val
+    else error "First argument to CTensorSetExn not a tensor"
+  | CTensorSetExn2 t ->
+    let is = _ofTmSeq arg in
+    let val = CTensorSetExn3 (t, is) in
+    const_ val
+  | CTensorSetExn3 (t, is) ->
+    match (t, arg) with (TInt t, TmConst { val = CInt { val = v } }) then
+      tensorSetExn t is v;
+      unit_
+    else
+    match (t, arg) with (TFloat t, TmConst { val = CFloat { val = v } }) then
+      tensorSetExn t is v;
+      unit_
+    else
+    match (t, arg) with (TExpr t, v) then
+      tensorSetExn t is v;
+      unit_
+    else error "Tensor and value type does not match in CTensorSetExn"
+  | CTensorRank _ ->
+    match arg with TmTensor { val = t } then
+      match t with TInt t | TFloat t | TExpr t then
+        let val = tensorRank t in
+        int_ val
+      else never
+    else error "First argument to CTensorRank not a tensor"
+  | CTensorShape _ ->
+    match arg with TmTensor { val = t } then
+      match t with TInt t | TFloat t | TExpr t then
+        let shape = tensorShape t in
+        _toTmSeq shape
+      else never
+    else error "First argument to CTensorRank not a tensor"
+  | CTensorReshapeExn _ ->
+    match arg with TmTensor { val = t } then
+      let val = CTensorReshapeExn2 t in
+      const_ val
+    else error "First argument to CTensorReshapeExn not a tensor"
+  | CTensorReshapeExn2 t ->
+    let is = _ofTmSeq arg in
+    match t with TInt t then
+      let view = tensorReshapeExn t is in
+      TmTensor { val = TInt view }
+    else match t with TFloat t then
+      let view = tensorReshapeExn t is in
+      TmTensor { val = TFloat view }
+    else match t with TExpr t then
+      let view = tensorReshapeExn t is in
+      TmTensor { val = TExpr view }
+    else never
+  | CTensorCopyExn _ ->
+    match arg with TmTensor { val = t } then
+      let val = CTensorCopyExn2 t in
+      const_ val
+    else error "First argument to CTensorCopyExn not a tensor"
+  | CTensorCopyExn2 t1 ->
+    match arg with TmTensor { val = t2 } then
+      match (t1, t2) with (TInt t1, TInt t2) then
+        tensorCopyExn t1 t2;
+        unit_
+      else match (t1, t2) with (TFloat t1, TFloat t2) then
+        tensorCopyExn t1 t2;
+        unit_
+      else match (t1, t2) with (TExpr t1, TExpr t2) then
+        tensorCopyExn t1 t2;
+        unit_
+      else error "Tensor type mismatch in CTensorCopyExn"
+    else error "First argument to CTensorCopyExn not a tensor"
+  | CTensorSliceExn _ ->
+    match arg with TmTensor { val = t } then
+      let val = CTensorSliceExn2 t in
+      const_ val
+    else error "First argument to CTensorSliceExn not a tensor"
+  | CTensorSliceExn2 t ->
+    let is = _ofTmSeq arg in
+    match t with TInt t then
+      let view = tensorSliceExn t is in
+      TmTensor { val = TInt view }
+    else match t with TFloat t then
+      let view = tensorSliceExn t is in
+      TmTensor { val = TFloat view }
+    else match t with TExpr t then
+      let view = tensorSliceExn t is in
+      TmTensor { val = TExpr view }
+    else never
+  | CTensorSubExn _ ->
+    match arg with TmTensor { val = t } then
+      let val = CTensorSubExn2 t in
+      const_ val
+    else error "First argument to CTensorSubExn not a tensor"
+  | CTensorSubExn2 t ->
+    match arg with TmConst { val = CInt { val = ofs }} then
+      let val = CTensorSubExn3 (t, ofs) in
+      const_ val
+    else error "Second argument to CTensorSubExn not an integer"
+  | CTensorSubExn3 (t, ofs) ->
+    match arg with TmConst { val = CInt { val = len }} then
+      match t with TInt t then
+        let view = tensorSubExn t ofs len in
+        TmTensor { val = TInt view }
+      else match t with TFloat t then
+        let view = tensorSubExn t ofs len in
+        TmTensor { val = TFloat view }
+      else match t with TExpr t then
+        let view = tensorSubExn t ofs len in
+        TmTensor { val = TExpr view }
+      else never
+    else error "Second argument to CTensorSubExn not an integer"
+  | CTensorIteri _ ->
+    let val = CTensorIteri2 arg in
+    const_ val
 end
 
 lang FloatStringConversionEval = FloatStringConversionAst
@@ -705,7 +964,7 @@ lang FileOpEval = FileOpAst + SeqAst + BoolAst + CharAst + UnknownTypeAst
   | CFileWrite _ ->
     match arg with TmSeq s then
       let f = _seqOfCharToString s.tms in
-      TmConst {val = CFileWrite2 f, ty = TyUnknown {}, info = NoInfo()}
+      TmConst {val = CFileWrite2 f, ty = tyunknown_, info = NoInfo()}
     else error "f in writeFile not a sequence"
   | CFileWrite2 f ->
     match arg with TmSeq s then
@@ -716,7 +975,7 @@ lang FileOpEval = FileOpAst + SeqAst + BoolAst + CharAst + UnknownTypeAst
   | CFileExists _ ->
     match arg with TmSeq s then
       let f = _seqOfCharToString s.tms in
-      TmConst {val = CBool {val = fileExists f}, ty = TyUnknown {}, info = NoInfo()}
+      TmConst {val = CBool {val = fileExists f}, ty = tyunknown_, info = NoInfo()}
     else error "f in fileExists not a sequence"
   | CFileDelete _ ->
     match arg with TmSeq s then
@@ -728,15 +987,16 @@ end
 
 lang IOEval = IOAst + SeqAst + UnknownTypeAst
   sem delta (arg : Expr) =
-  | CPrintString _ ->
+  | CPrint _ ->
     match arg with TmSeq s then
       let s = _seqOfCharToString s.tms in
       print s;
       unit_
     else error "string to print is not a string"
+  | CDPrint _ -> unit_
   | CReadLine _ ->
     let s = readLine () in
-    TmSeq {tms = map char_ s, ty = TyUnknown {}, info = NoInfo()}
+    TmSeq {tms = map char_ s, ty = tyunknown_, info = NoInfo()}
 end
 
 lang RandomNumberGeneratorEval = RandomNumberGeneratorAst + IntAst
@@ -784,12 +1044,12 @@ lang TimeEval = TimeAst + IntAst
     match arg with TmConst {val = CInt {val = n}} then
       sleepMs n;
       unit_
-    else error "n in wallTimeMs not a constant integer"
+    else error "n in sleepMs not a constant integer"
   | CWallTimeMs _ ->
     float_ (wallTimeMs ())
 end
 
-lang RefOpEval = RefOpAst + IntAst
+lang RefOpEval = RefOpAst + RefEval + IntAst
   syn Const =
   | CModRef2 Ref
 
@@ -797,7 +1057,7 @@ lang RefOpEval = RefOpAst + IntAst
   | CRef _ -> TmRef {ref = ref arg}
   | CModRef _ ->
     match arg with TmRef {ref = r} then
-      TmConst {val = CModRef2 r, info = NoInfo()}
+      TmConst {val = CModRef2 r, ty = tyunknown_, info = NoInfo()}
     else error "first argument of modref not a reference"
   | CModRef2 r ->
     modref r arg;
@@ -808,14 +1068,13 @@ lang RefOpEval = RefOpAst + IntAst
     else error "not a deref of a reference"
 end
 
-
 --------------
 -- PATTERNS --
 --------------
 
 lang NamedPatEval = NamedPat
   sem tryMatch (env : Env) (t : Expr) =
-  | PatNamed {ident = PName name} -> Some (_evalInsert name t env)
+  | PatNamed {ident = PName name} -> Some (mapInsert name t env)
   | PatNamed {ident = PWildcard ()} -> Some env
 end
 
@@ -841,7 +1100,7 @@ lang SeqEdgePatEval = SeqEdgePat + SeqAst
         let paired = zipWith pair (concat preTm postTm) (concat pre post) in
         let env = optionFoldlM (lam env. lam pair. tryMatch env pair.0 pair.1) env paired in
         match middle with PName name then
-          optionMap (_evalInsert name (seq_ tms)) env
+          optionMap (mapInsert name (seq_ tms)) env
         else match middle with PWildcard () then
           env
         else never else never else never
@@ -853,9 +1112,9 @@ lang RecordPatEval = RecordAst + RecordPat
   sem tryMatch (env : Env) (t : Expr) =
   | PatRecord r ->
     match t with TmRecord {bindings = bs} then
-      assocFoldlM {eq = eqString}
+      mapFoldlOption
         (lam env. lam k. lam p.
-          match assocLookup {eq = eqString} k bs with Some v then
+          match mapLookup k bs with Some v then
             tryMatch env v p
           else None ())
         env
@@ -932,18 +1191,17 @@ end
 
 lang MExprEval =
 
-  -- Symbolize is required before eval, and MExprEq is used below when testing.
-  MExprSym + MExprEq
-
   -- Terms
-  + VarEval + AppEval + LamEval + FixEval + RecordEval + RecLetsEval +
-  ConstEval + DataEval + MatchEval + UtestEval + SeqEval + NeverEval + RefEval
+  VarEval + AppEval + LamEval + FixEval + RecordEval + RecLetsEval +
+  ConstEval + TypeEval + DataEval + MatchEval + UtestEval + SeqEval +
+  NeverEval + RefEval
 
   -- Constants
   + ArithIntEval + ShiftIntEval + ArithFloatEval + CmpIntEval + CmpFloatEval +
   SymbEval + CmpSymbEval + SeqOpEval + FileOpEval + IOEval + SysEval +
   RandomNumberGeneratorEval + FloatIntConversionEval + CmpCharEval +
-  IntCharConversionEval + FloatStringConversionEval + TimeEval + RefOpEval
+  IntCharConversionEval + FloatStringConversionEval + TimeEval + RefOpEval +
+  TensorOpEval
 
   -- Patterns
   + NamedPatEval + SeqTotPatEval + SeqEdgePatEval + RecordPatEval + DataPatEval +
@@ -958,13 +1216,18 @@ end
 -- TESTS --
 -----------
 
+lang TestLang = MExprEval + MExprPrettyPrint + MExprEq + MExprSym
+
 mexpr
 
-use MExprEval in
+use TestLang in
 
 -- Evaluation shorthand used in tests below
+let evalNoSymbolize =
+  lam t. eval {env = builtinEnv} t in
+
 let eval =
-  lam t. eval {env = assocEmpty} (symbolize t) in
+  lam t. evalNoSymbolize (symbolize t) in
 
 let id = ulam_ "x" (var_ "x") in
 let bump = ulam_ "x" (addi_ (var_ "x") (int_ 1)) in
@@ -972,7 +1235,7 @@ let fst = ulam_ "t" (tupleproj_ 0 (var_ "t")) in
 let appIdUnit = app_ id unit_ in
 let appBump3 = app_ bump (int_ 3) in
 let appFst = app_ fst (tuple_ [not_ false_, addi_ (int_ 1) (int_ 2)]) in
-utest eval appIdUnit with unit_ in
+utest eval appIdUnit with unit_ using eqExpr in
 utest eval appBump3 with (int_ 4) in
 utest eval appFst with true_ in
 
@@ -983,7 +1246,7 @@ let dataDecl =
       (tupleproj_ 0 (var_ "u"))
       id) in
 
-utest eval dataDecl with unit_ in
+utest eval dataDecl with unit_ using eqExpr in
 
 -- Commented out to not clutter the test suite
 -- let utest_test1 = utest_ (int_ 1) (int_ 2) unit_ in
@@ -1120,7 +1383,7 @@ utest eval recordUpdate2 with (int_ 1729) in
 
 let recordUpdateNonValue =
   (recordupdate_ (record_ [("a", int_ 10)]) "a" (addi_ (int_ 1729) (int_ 1))) in
-utest eval recordUpdateNonValue with record_ [("a", int_ 1730)] in
+utest eval recordUpdateNonValue with record_ [("a", int_ 1730)] using eqExpr in
 
 
 -- Commented out to not clutter the test suite
@@ -1190,16 +1453,21 @@ utest eval reverseAst with seq_ [int_ 3, int_ 2, int_ 1] in
 -- splitAt [1,4,2,3] 2 -> ([1,4],[2,3])
 let splitAtAst = splitat_ (seq_ [int_ 1, int_ 4, int_ 2, int_ 3]) (int_ 2) in
 utest eval splitAtAst
-with tuple_ [seq_ [int_ 1, int_ 4], seq_ [int_ 2, int_ 3]] in
+with tuple_ [seq_ [int_ 1, int_ 4], seq_ [int_ 2, int_ 3]]
+using eqExpr in
 
 -- create 3 (lam. 42) -> [42, 42, 42]
 let createAst = create_ (int_ 3) (ulam_ "_" (int_ 42)) in
-utest eval createAst with seq_ [int_ 42, int_ 42, int_ 42] in
+utest eval createAst with seq_ [int_ 42, int_ 42, int_ 42] using eqExpr in
 
 -- create 3 (lam i. i) -> [0, 1, 2]
 let i = nameSym "i" in
 let createAst2 = create_ (int_ 3) (nulam_ i (nvar_ i)) in
 utest eval createAst2 with seq_ [int_ 0, int_ 1, int_ 2] in
+
+-- subsequence [3,5,8,6] 2 4 -> [8,6]
+let subseqAst = subsequence_ (seq_ [int_ 3, int_ 5, int_ 8, int_ 6]) (int_ 2) (int_ 4) in
+utest eval subseqAst with seq_ [int_ 8, int_ 6] in
 
 -- Unit tests for CmpFloatEval
 utest eval (eqf_ (float_ 2.0) (float_ 1.0)) with false_ in
@@ -1245,10 +1513,10 @@ utest eval (eqi_ (sym2hash_ s1) (sym2hash_ s2)) with false_ in
 let f = str_ "test_file_ops" in
 let d = str_ "$&!@" in
 utest eval (fileExists_ f) with false_ in
-utest eval (writeFile_ f d) with unit_ in
+utest eval (writeFile_ f d) with unit_ using eqExpr in
 utest eval (fileExists_ f) with true_ in
 utest eval (readFile_ f) with d in
-utest eval (deleteFile_ f) with unit_ in
+utest eval (deleteFile_ f) with unit_ using eqExpr in
 utest eval (fileExists_ f) with false_ in
 
 -- Test error
@@ -1328,14 +1596,16 @@ utest eval (match_
   (pseqedge_ [pvar_ "a"] "b" [pvar_ "c", pvar_ "d"])
   (tuple_ [var_ "a", var_ "b", var_ "c", var_ "d"])
   false_)
-with tuple_ [int_ 1, seq_ [int_ 2, int_ 3], int_ 4, int_ 5] in
+with tuple_ [int_ 1, seq_ [int_ 2, int_ 3], int_ 4, int_ 5]
+using eqExpr in
 
 utest eval (match_
   (seq_ [int_ 1, int_ 2, int_ 3])
   (pseqedge_ [pvar_ "a"] "b" [pvar_ "c", pvar_ "d"])
   (tuple_ [var_ "a", var_ "b", var_ "c", var_ "d"])
   false_)
-with tuple_ [int_ 1, seq_ [], int_ 2, int_ 3] in
+with tuple_ [int_ 1, seq_ [], int_ 2, int_ 3]
+using eqExpr in
 
 utest eval (match_
   (seq_ [int_ 1, int_ 2])
@@ -1349,7 +1619,8 @@ utest eval (match_
   (pseqtot_ [pvar_ "a", pvar_ "b", pvar_ "c"])
   (tuple_ [var_ "a", var_ "b", var_ "c"])
   false_)
-with tuple_ [int_ 1, int_ 2, int_ 3] in
+with tuple_ [int_ 1, int_ 2, int_ 3]
+using eqExpr in
 
 utest eval (match_
   (seq_ [int_ 1, int_ 2, int_ 3, int_ 4])
@@ -1370,11 +1641,12 @@ utest eval (match_
   (pand_ (pvar_ "a") (ptuple_ [pvar_ "b", pint_ 2]))
   (tuple_ [var_ "a", var_ "b"])
   (tuple_ [tuple_ [int_ 70, int_ 72], int_ 71]))
-with tuple_ [tuple_ [int_ 1, int_ 2], int_ 1] in
+with tuple_ [tuple_ [int_ 1, int_ 2], int_ 1]
+using eqExpr in
 
 -- I/O operations
--- utest eval (printString_ (str_ "Hello World")) with unit_ in
--- utest eval (printString_ (readLine_ unit_)) with unit_ in
+-- utest eval (print_ (str_ "Hello World")) with unit_ in
+-- utest eval (print_ (readLine_ unit_)) with unit_ in
 
 -- Random number generation
 utest eval (bind_ (ulet_ "_" (randSetSeed_ (int_ 42)))
@@ -1468,14 +1740,15 @@ let p = bindall_ [ulet_ "r1" (ref_ (int_ 1)),
                   ulet_ "r4"
                     (ref_ (ulam_ "x" (concat_ (str_ "Hello ") (var_ "x"))))]
 in
-utest eval (bind_ p (modref_ (var_ "r1") (int_ 2))) with unit_ in
+utest eval (bind_ p (modref_ (var_ "r1") (int_ 2))) with unit_ using eqExpr in
 utest
   eval (bind_ p
     (tuple_ [deref_ (var_ "r1"),
              deref_ (var_ "r2"),
              deref_ (var_ "r3"),
              app_ (deref_ (var_ "r4")) (str_ "test")]))
-with tuple_ [int_ 1, float_ 2., int_ 1, str_ "Hello test"] in
+with tuple_ [int_ 1, float_ 2., int_ 1, str_ "Hello test"]
+using eqExpr in
 
 utest
   eval (bind_ p (bindall_
@@ -1483,6 +1756,79 @@ utest
      ulet_ "_" (modref_ (var_ "r2") (float_ 3.14)),
      ulet_ "_" (modref_ (var_ "r3") (int_ 4)),
      tuple_ [deref_ (var_ "r1"), deref_ (var_ "r2"), deref_ (var_ "r3")]]))
-with tuple_ [int_ 4, float_ 3.14, int_ 4] in
+with tuple_ [int_ 4, float_ 3.14, int_ 4]
+using eqExpr in
+
+-- Tensors
+let testTensors = lam v.
+  let t0 = eval (tensorCreate_ (seq_ []) (ulam_ "x" v.0)) in
+  let t1 = eval (tensorCreate_ (seq_ [int_ 4]) (ulam_ "x" v.0)) in
+  let t2 = eval (tensorCreate_ (seq_ [int_ 4]) (ulam_ "x" v.1)) in
+
+  let evaln = evalNoSymbolize in
+
+  utest evaln (tensorGetExn_ t0 (seq_ [])) with v.0 in
+  utest evaln (tensorGetExn_ t1 (seq_ [int_ 0])) with v.0 in
+  utest evaln (tensorGetExn_ t1 (seq_ [int_ 1])) with v.0 in
+
+  utest evaln (tensorSetExn_ t0 (seq_ []) v.1) with unit_ using eqExpr in
+  utest evaln (tensorSetExn_ t1 (seq_ [int_ 0]) v.1) with unit_ using eqExpr in
+  utest evaln (tensorSetExn_ t1 (seq_ [int_ 1]) v.2) with unit_ using eqExpr in
+
+  utest evaln (tensorGetExn_ t0 (seq_ [])) with v.1 in
+  utest evaln (tensorGetExn_ t1 (seq_ [int_ 0])) with v.1 in
+  utest evaln (tensorGetExn_ t1 (seq_ [int_ 1])) with v.2 in
+
+  utest evaln (tensorRank_ t0) with int_ 0 in
+  utest evaln (tensorRank_ t1) with int_ 1 in
+
+  utest evaln (tensorShape_ t0) with seq_ [] in
+  utest evaln (tensorShape_ t1) with seq_ [int_ 4] in
+
+  utest evaln (tensorShape_ (tensorReshapeExn_ t0 (seq_ [int_ 1])))
+  with seq_ [int_ 1] in
+
+  utest evaln (tensorShape_ (tensorReshapeExn_ t1 (seq_ [int_ 2, int_ 2])))
+  with seq_ [int_ 2, int_ 2] in
+
+  utest evaln (tensorCopyExn_ t1 t2) with unit_ using eqExpr in
+
+  utest evaln (tensorRank_ (tensorSliceExn_ t1 (seq_ [int_ 0])))
+  with int_ 0 in
+
+  utest evaln (tensorShape_ (tensorSliceExn_ t1 (seq_ [int_ 0])))
+  with seq_ [] in
+
+  utest evaln (tensorRank_ (tensorSubExn_ t1 (int_ 0) (int_ 2)))
+  with int_ 1 in
+
+  utest evaln (tensorShape_ (tensorSubExn_ t1 (int_ 0) (int_ 2)))
+  with seq_ [int_ 2] in
+
+  let t3 = eval (tensorCreate_ (seq_ [int_ 3]) (ulam_ "x" v.0)) in
+  let f = eval (ulam_ "i"
+                  (ulam_ "x"
+                     (tensorCopyExn_ (var_ "x") (var_ "x"))))
+  in
+  utest evaln (tensorIteri_ f t3) with unit_ using eqExpr in
+  ()
+in
+
+let t3 = eval (tensorCreate_ (seq_ [int_ 3]) (ulam_ "x" (int_ 0))) in
+let f = eval (ulam_ "i"
+                (ulam_ "x"
+                   (tensorSetExn_ (var_ "x") (seq_ []) (var_ "i"))))
+in
+
+let evaln = evalNoSymbolize in
+
+utest evaln (tensorIteri_ f t3) with unit_ using eqExpr in
+utest evaln (tensorGetExn_ t3 (seq_ [int_ 0])) with int_ 0 in
+utest evaln (tensorGetExn_ t3 (seq_ [int_ 1])) with int_ 1 in
+utest evaln (tensorGetExn_ t3 (seq_ [int_ 2])) with int_ 2 in
+
+testTensors (int_ 0, int_ 1, int_ 2);
+testTensors (float_ 0., float_ 1., float_ 2.);
+testTensors (seq_ [int_ 0], seq_ [int_ 1], seq_ [int_ 2]);
 
 ()

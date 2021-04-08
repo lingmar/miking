@@ -602,6 +602,7 @@ end
 lang PPrintLang = MExprPrettyPrint + HolePrettyPrint
 
 lang TestLang = MExpr + ContextAwareHoles + PPrintLang + MExprANF + HoleANF
+  + MExprSym
 
 lang MExprHoles = MExpr + ContextAwareHoles + PPrintLang + MExprANF + HoleANF
 
@@ -729,7 +730,7 @@ let letWithFunCall = {
 let factorial = {
   ast = bind_
     (ureclets_add "factorial"
-           (lam_ "n" (TyInt {})
+           (lam_ "n" (tyint_)
                  (if_ (eqi_ (var_ "n") (int_ 0))
                       (int_ 1)
                       (muli_ (var_ "n")

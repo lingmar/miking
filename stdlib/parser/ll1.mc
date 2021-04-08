@@ -183,7 +183,7 @@ let ll1GenParser : Grammar prodLabel -> Either (GenError prodLabel) (Table prodL
         productions in
 
     let addNtToFirstSet = lam prev. lam nt. lam symset.
-      let prods = mapFind nt groupedProds in
+      let prods = mapFindWithExn nt groupedProds in
       foldl (lam symset. lam prod. addProdToFirst prev prod symset) symset prods in
 
     -- let dprintFirstSet = lam firstSet.
@@ -231,7 +231,7 @@ let ll1GenParser : Grammar prodLabel -> Either (GenError prodLabel) (Table prodL
             let otherSymset = firstOfRhs rhs in
             let ntFollow = mapUnion ntFollow otherSymset.syms in
             let ntFollow = if otherSymset.eps
-              then mapUnion ntFollow (mapFind prodNt follow)
+              then mapUnion ntFollow (mapFindWithExn prodNt follow)
               else ntFollow in
             work (mapInsert nt ntFollow follow) rhs
           else match rhs with [_] ++ rhs then
@@ -266,11 +266,11 @@ let ll1GenParser : Grammar prodLabel -> Either (GenError prodLabel) (Table prodL
     let ll1Errors = mapMap (lam. ref (mapEmpty _compareSymbol)) groupedProds in
 
     let addProdToTable = lam prod. match prod with {nt = prodNt, label = label, rhs = rhs, action = action} then
-      let tableRef = mapFind prodNt table in
+      let tableRef = mapFindWithExn prodNt table in
       let prev = deref tableRef in
       let firstSymset = firstOfRhs rhs in
       let symset = if firstSymset.eps
-        then mapUnion firstSymset.syms (mapFind prodNt followSet)
+        then mapUnion firstSymset.syms (mapFindWithExn prodNt followSet)
         else firstSymset.syms in
       let newProd = {action = action, label = label, syms = map specSymToGenSym rhs} in
       let tableAdditions = mapMap (lam. newProd) symset in
@@ -280,7 +280,7 @@ let ll1GenParser : Grammar prodLabel -> Either (GenError prodLabel) (Table prodL
             let sym = binding.0 in
             match mapLookup sym prev with Some prevProd then
               modref hasLl1Error true;
-              let errRef = mapFind prodNt ll1Errors in
+              let errRef = mapFindWithExn prodNt ll1Errors in
               let errTab = deref errRef in
               let errList = match mapLookup sym errTab
                 with Some prods then snoc prods label
@@ -310,7 +310,7 @@ let ll1GenParser : Grammar prodLabel -> Either (GenError prodLabel) (Table prodL
 
     if deref hasLl1Error
       then Left (mapFromList cmpString (filter (lam binding. not (null (mapBindings binding.1))) (mapBindings (mapMap deref ll1Errors))))
-      else Right {start = {nt = startNt, table = mapFind startNt table}, lits = lits}
+      else Right {start = {nt = startNt, table = mapFindWithExn startNt table}, lits = lits}
   else never
 
 let ll1NonTerminal : String -> NonTerminal = identity
@@ -318,7 +318,7 @@ let ll1NonTerminal : String -> NonTerminal = identity
 let ll1Nt : NonTerminal -> Symbol = use ParserSpec in lam nt. NtSpec nt
 let ll1Lit : String -> Symbol = use ParserSpec in lam str.
   match nextToken {str = str, pos = posVal "" 1 1} with {lit = lit, stream = {str = unlexed}} then
-    match (unlexed, lit) with ([], ![]) then Lit {lit = str}
+    match (unlexed, lit) with ([], ![]) then Lit {lit = str, info = NoInfo ()}
     else error (join ["A literal token does not lex as a single token: \"", str, "\""])
   else never
 let ll1LIdent : Symbol = use ParserSpec in Tok (LIdentTok {val = "", info = NoInfo ()})
@@ -391,7 +391,7 @@ let gFailOnce : Grammar String =
 
 utest errorMapToBindingsExc (genParser gFailOnce)
 with [ ( "Declaration"
-  , [ ( ParserBase_Lit { lit = "let" }
+  , [ ( ParserBase_Lit { lit = "let", info = NoInfo () }
       , [ "decllet" , "declletrec" ]
       )
     ]
@@ -416,7 +416,7 @@ let gFailTwice : Grammar String =
 
 utest errorMapToBindingsExc (genParser gFailTwice)
 with [ ( "Declaration"
-  , [ ( ParserBase_Lit { lit = "let" }
+  , [ ( ParserBase_Lit { lit = "let", info = NoInfo () }
       , [ "decllet" , "declletrec" , "declletmut" ]
       )
     ]
@@ -446,7 +446,7 @@ let gFailLet : Grammar String =
 
 utest errorMapToBindingsExc (genParser gFailLet)
 with [ ( "ExpressionFollow"
-  , [ ( ParserBase_Lit { lit = "let" }
+  , [ ( ParserBase_Lit { lit = "let", info = NoInfo () }
       , [ "exprfollowsome" , "exprfollownone" ]
       )
     ]
@@ -608,7 +608,7 @@ with Left (UnexpectedToken
     , {label = ("topdecl"),seen = ([]),rest = ([])}
     , { label = ("decllet")
       , seen = ([(ParserBase_Lit {lit = ("let"),info = (Info {filename = ("file"),row2 = 1,row1 = 1,col2 = 3,col1 = 0})})])
-      , rest = ([(ParserBase_Tok (LIdentTokenParser_LIdentTok {val = ([]),info = (NoInfo ())})),(ParserBase_Lit {lit = ("=")}),(ParserSpec_NtSpec ("Expression"))])
+      , rest = ([(ParserBase_Tok (LIdentTokenParser_LIdentTok {val = ([]),info = (NoInfo ())})),(ParserBase_Lit {lit = ("="), info = NoInfo ()}),(ParserSpec_NtSpec ("Expression"))])
       }
     ])
   , found = (ParserBase_Tok (EOFTokenParser_EOFTok {info = (Info {filename = ("file"),row2 = 1,row1 = 1,col2 = 3,col1 = 3})}))
@@ -641,7 +641,7 @@ with Left (UnexpectedToken
     , {label = ("topdecl"),seen = ([]),rest = ([])}
     , { label = ("decllet")
       , seen = ([(ParserBase_Lit {lit = ("let"),info = (Info {filename = ("file"),row2 = 1,row1 = 1,col2 = 3,col1 = 0})})])
-      , rest = ([(ParserBase_Tok (LIdentTokenParser_LIdentTok {val = ([]),info = (NoInfo ())})),(ParserBase_Lit {lit = ("=")}),(ParserSpec_NtSpec ("Expression"))])
+      , rest = ([(ParserBase_Tok (LIdentTokenParser_LIdentTok {val = ([]),info = (NoInfo ())})),(ParserBase_Lit {lit = ("="), info = NoInfo ()}),(ParserSpec_NtSpec ("Expression"))])
       }
     ])
   , found = (ParserBase_Lit {lit = ("let"),info = (Info {filename = ("file"),row2 = 1,row1 = 1,col2 = 7,col1 = 4})})

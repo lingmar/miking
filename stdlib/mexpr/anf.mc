@@ -2,6 +2,7 @@
 -- al. (1993).
 
 include "name.mc"
+include "stringid.mc"
 
 include "mexpr/ast.mc"
 include "mexpr/ast-builder.mc"
@@ -25,14 +26,14 @@ lang ANF = LetAst + VarAst + UnknownTypeAst
     let ident = nameSym "t" in
     let var = TmVar {
       ident = ident,
-      ty = TyUnknown {},
+      ty = tyunknown_,
       info = NoInfo {}
     } in
     TmLet {ident = ident,
-           tyBody = TyUnknown {},
+           tyBody = tyunknown_,
            body = n,
            inexpr = k var,
-           ty = TyUnknown {},
+           ty = tyunknown_,
            info = NoInfo{}}
 
   sem normalizeName (k : Expr -> Expr) =
@@ -93,10 +94,10 @@ lang RecordANF = ANF + RecordAst
       (lam acc. lam k. lam e.
          (lam bs.
             normalizeName
-              (lam v. acc (assocInsert {eq=eqString} k v bs))
+              (lam v. acc (mapInsert k v bs))
               e))
     in
-    (assocFold {eq=eqString} f acc t.bindings) assocEmpty
+    (mapFoldWithKey f acc t.bindings) (mapEmpty (mapGetCmpFun t.bindings))
 
   | TmRecordUpdate t ->
     normalizeName
@@ -190,10 +191,11 @@ lang UtestANF = ANF + UtestAst
   | TmUtest _ -> false
 
   sem normalize (k : Expr -> Expr) =
-  | TmUtest t ->
-    TmUtest {{{t with test = normalizeTerm t.test}
+  | TmUtest t -> let tusing = optionMap normalizeTerm t.tusing in
+    TmUtest {{{{t with test = normalizeTerm t.test}
                  with expected = normalizeTerm t.expected}
                  with next = normalize k t.next}
+                 with tusing = tusing}
 
 end
 
@@ -314,30 +316,29 @@ let record =
 in
 utest _anf record with
   bindall_ [
-    ulet_ "t" (app_ (int_ 2) (int_ 3)),
-    ulet_ "t1" (app_ (int_ 1) (var_ "t")),
-    ulet_ "t2" (app_ (int_ 5) (int_ 6)),
+    ulet_ "t" (app_ (int_ 5) (int_ 6)),
+    ulet_ "t1" (app_ (int_ 2) (int_ 3)),
+    ulet_ "t2" (app_ (int_ 1) (var_ "t1")),
     ulet_ "t3" (record_ [
-      ("a", var_ "t1"),
+      ("a", var_ "t2"),
       ("b", int_ 4),
-      ("c", var_ "t2")
+      ("c", var_ "t")
     ]),
     var_ "t3"
   ]
 using eqExpr in
 
 
-let rupdate =
-  recordupdate_ record "b" (int_ 7) in
+let rupdate = recordupdate_ record "b" (int_ 7) in
 utest _anf rupdate with
   bindall_ [
-    ulet_ "t" (app_ (int_ 2) (int_ 3)),
-    ulet_ "t1" (app_ (int_ 1) (var_ "t")),
-    ulet_ "t2" (app_ (int_ 5) (int_ 6)),
+    ulet_ "t" (app_ (int_ 5) (int_ 6)),
+    ulet_ "t1" (app_ (int_ 2) (int_ 3)),
+    ulet_ "t2" (app_ (int_ 1) (var_ "t1")),
     ulet_ "t3" (record_ [
-      ("a", var_ "t1"),
+      ("a", var_ "t2"),
       ("b", int_ 4),
-      ("c", var_ "t2")
+      ("c", var_ "t")
     ]),
     ulet_ "t4" (recordupdate_ (var_ "t3") "b" (int_ 7)),
     var_ "t4"

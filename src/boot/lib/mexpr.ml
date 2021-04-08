@@ -115,14 +115,21 @@ let builtin =
   ; ("deref", f CdeRef)
   ; ("modref", f (CmodRef None)) (* MCore intrinsics: Maps *)
   ; ("mapEmpty", f CmapEmpty)
+  ; ("mapSize", f CmapSize)
+  ; ("mapGetCmpFun", f CmapGetCmpFun)
   ; ("mapInsert", f (CmapInsert (None, None)))
   ; ("mapRemove", f (CmapRemove None))
-  ; ("mapFind", f (CmapFind None))
+  ; ("mapFindWithExn", f (CmapFindWithExn None))
+  ; ("mapFindOrElse", f (CmapFindOrElse (None, None)))
+  ; ("mapFindApplyOrElse", f (CmapFindApplyOrElse (None, None, None)))
   ; ("mapAny", f (CmapAny None))
   ; ("mapMem", f (CmapMem None))
   ; ("mapMap", f (CmapMap None))
   ; ("mapMapWithKey", f (CmapMapWithKey None))
+  ; ("mapFoldWithKey", f (CmapFoldWithKey (None, None)))
   ; ("mapBindings", f CmapBindings)
+  ; ("mapEq", f (CmapEq (None, None)))
+  ; ("mapCmp", f (CmapCmp (None, None)))
   ; ("tensorCreate", f (CtensorCreate None)) (* MCore intrinsics: Tensors *)
   ; ("tensorGetExn", f (CtensorGetExn None))
   ; ("tensorSetExn", f (CtensorSetExn (None, None)))
@@ -134,8 +141,10 @@ let builtin =
   ; ("tensorSubExn", f (CtensorSubExn (None, None)))
   ; ("tensorIteri", f (CtensorIteri None)) (* MCore intrinsics: Boot parser *)
   ; ("bootParserParseMExprString", f CbootParserParseMExprString)
+  ; ("bootParserParseMCoreFile", f CbootParserParseMCoreFile)
   ; ("bootParserGetId", f CbootParserGetId)
   ; ("bootParserGetTerm", f (CbootParserGetTerm None))
+  ; ("bootParserGetType", f (CbootParserGetType None))
   ; ("bootParserGetString", f (CbootParserGetString None))
   ; ("bootParserGetInt", f (CbootParserGetInt None))
   ; ("bootParserGetFloat", f (CbootParserGetFloat None))
@@ -392,6 +401,10 @@ let arity = function
       0
   | CmapEmpty ->
       1
+  | CmapSize ->
+      1
+  | CmapGetCmpFun ->
+      1
   | CmapInsert (None, None) ->
       3
   | CmapInsert (Some _, None) ->
@@ -402,9 +415,23 @@ let arity = function
       2
   | CmapRemove (Some _) ->
       1
-  | CmapFind None ->
+  | CmapFindWithExn None ->
       2
-  | CmapFind (Some _) ->
+  | CmapFindWithExn (Some _) ->
+      1
+  | CmapFindOrElse (None, None) ->
+      3
+  | CmapFindOrElse (Some _, None) ->
+      2
+  | CmapFindOrElse (_, Some _) ->
+      1
+  | CmapFindApplyOrElse (None, None, None) ->
+      4
+  | CmapFindApplyOrElse (Some _, None, None) ->
+      3
+  | CmapFindApplyOrElse (_, Some _, None) ->
+      2
+  | CmapFindApplyOrElse (_, _, Some _) ->
       1
   | CmapAny None ->
       2
@@ -422,11 +449,27 @@ let arity = function
       2
   | CmapMapWithKey (Some _) ->
       1
+  | CmapFoldWithKey (None, None) ->
+      3
+  | CmapFoldWithKey (Some _, None) ->
+      2
+  | CmapFoldWithKey (_, Some _) ->
+      1
   | CmapBindings ->
       1
+  | CmapEq (None, None) ->
+      3
+  | CmapEq (Some _, None) ->
+      2
+  | CmapEq (_, Some _) ->
+      1
+  | CmapCmp (None, None) ->
+      3
+  | CmapCmp (Some _, None) ->
+      2
+  | CmapCmp (_, Some _) ->
+      1
   (* MCore intrinsics: Tensor *)
-  | CTensor _ ->
-      0
   | CtensorCreate None ->
       2
   | CtensorCreate (Some _) ->
@@ -472,11 +515,17 @@ let arity = function
       0
   | CbootParserParseMExprString ->
       1
+  | CbootParserParseMCoreFile ->
+      1
   | CbootParserGetId ->
       1
   | CbootParserGetTerm None ->
       2
   | CbootParserGetTerm (Some _) ->
+      1
+  | CbootParserGetType None ->
+      2
+  | CbootParserGetType (Some _) ->
       1
   | CbootParserGetString None ->
       2
@@ -519,29 +568,12 @@ let arity = function
   | CExt v ->
       Ext.arity v
 
-(* Random number generation *)
-let rand_is_seeded = ref false
-
-let rand_set_seed seed =
-  Random.init seed ;
-  rand_is_seeded := true
-
-let rand_int_u lower upper =
-  if !rand_is_seeded then () else Random.self_init () ;
-  lower + Random.int (upper - lower)
-
 let fail_constapp f v fi =
   raise_error fi
     ( "Incorrect application. function: "
     ^ Ustring.to_utf8 (ustring_of_const f)
     ^ " value: "
     ^ Ustring.to_utf8 (ustring_of_tm v) )
-
-(* Get current time stamp *)
-let get_wall_time_ms _ = Unix.gettimeofday () *. 1000.
-
-(* Sleep a number of ms *)
-let sleep_ms ms = Thread.delay (float_of_int ms /. 1000.)
 
 (* Evaluates a constant application. This is the standard delta function
    delta(c,v) with the exception that it returns an expression and not
@@ -551,6 +583,18 @@ let sleep_ms ms = Thread.delay (float_of_int ms /. 1000.)
 let delta eval env fi c v =
   let index_out_of_bounds_in_seq_msg = "Out of bounds access in sequence" in
   let fail_constapp = fail_constapp c v in
+  let tm_seq2int_seq fi tmseq =
+    let to_int = function
+      | TmConst (_, CChar n) ->
+          n
+      | _ ->
+          fail_constapp fi
+    in
+    tmseq |> Mseq.Helpers.map to_int
+  in
+  let int_seq2tm_seq fi intseq =
+    TmSeq (fi, Mseq.Helpers.map (fun n -> TmConst (fi, CChar n)) intseq)
+  in
   let tm_seq2int_array fi tmseq =
     tmseq
     |> Mseq.Helpers.map (function
@@ -566,6 +610,10 @@ let delta eval env fi c v =
       |> Mseq.Helpers.map (fun n -> TmConst (fi, CInt n))
     in
     TmSeq (fi, seq)
+  in
+  let mapCompare cmp x y =
+    let app = TmApp (fi, TmApp (fi, cmp, x), y) in
+    match eval env app with TmConst (_, CInt i) -> i | _ -> fail_constapp fi
   in
   match (c, v) with
   (* MCore intrinsics: Booleans *)
@@ -734,16 +782,7 @@ let delta eval env fi c v =
   | Cneqf None, _ | Cneqf (Some _), _ ->
       fail_constapp fi
   | Cstring2float, TmSeq (fi, s) ->
-      let to_char = function
-        | TmConst (_, CChar c) ->
-            c
-        | _ ->
-            fail_constapp fi
-      in
-      let f =
-        s |> Mseq.Helpers.map to_char |> Mseq.Helpers.to_array
-        |> Ustring.from_uchars
-      in
+      let f = tm_seq2int_seq fi s in
       TmConst (fi, CFloat (Intrinsics.FloatConversion.string2float f))
   | Cstring2float, _ ->
       fail_constapp fi
@@ -857,20 +896,20 @@ let delta eval env fi c v =
       if v1 >= v2 then
         raise_error fi
           "Lower bound to randInt must be smaller than upper bound"
-      else TmConst (fi, CInt (rand_int_u v1 v2))
+      else TmConst (fi, CInt (RNG.int_u v1 v2))
   | CrandIntU _, _ ->
       fail_constapp fi
   | CrandSetSeed, TmConst (_, CInt v) ->
-      rand_set_seed v ; tmUnit
+      RNG.set_seed v ; tmUnit
   | CrandSetSeed, _ ->
       fail_constapp fi
   (* MCore intrinsics: Time *)
   | CwallTimeMs, TmRecord (fi, x) when Record.is_empty x ->
-      TmConst (fi, CFloat (get_wall_time_ms ()))
+      TmConst (fi, CFloat (Time.get_wall_time_ms ()))
   | CwallTimeMs, _ ->
       fail_constapp fi
   | CsleepMs, TmConst (_, CInt v) ->
-      sleep_ms v ; tmUnit
+      Time.sleep_ms v ; tmUnit
   | CsleepMs, _ ->
       fail_constapp fi
   (* MCore intrinsics: Debug and I/O *)
@@ -883,8 +922,9 @@ let delta eval env fi c v =
       !program_output (ustring_of_tm t) ;
       tmUnit
   | CreadLine, TmRecord (_, r) when r = Record.empty ->
-      let line = try read_line () with End_of_file -> "" in
-      TmSeq (fi, line |> Ustring.from_utf8 |> ustring2tmseq fi)
+      let line = Intrinsics.IO.read_line () in
+      let tms = Mseq.Helpers.map (fun n -> TmConst (fi, CChar n)) line in
+      TmSeq (fi, tms)
   | CreadLine, _ ->
       fail_constapp fi
   | CreadBytesAsString, TmConst (_, CInt v) ->
@@ -905,23 +945,26 @@ let delta eval env fi c v =
   | CreadBytesAsString, _ ->
       fail_constapp fi
   | CreadFile, TmSeq (fi, lst) ->
-      TmSeq
-        (fi, tmseq2ustring fi lst |> Intrinsics.File.read |> ustring2tmseq fi)
+      let intseq = tm_seq2int_seq fi lst in
+      let str = Intrinsics.File.read intseq in
+      int_seq2tm_seq fi str
   | CreadFile, _ ->
       fail_constapp fi
   | CwriteFile None, TmSeq (fi, l) ->
-      TmConst (fi, CwriteFile (Some (tmseq2ustring fi l)))
+      TmConst (fi, CwriteFile (Some (tm_seq2int_seq fi l)))
   | CwriteFile (Some fname), TmSeq (fi, lst) ->
-      Intrinsics.File.write fname (tmseq2ustring fi lst) ;
+      Intrinsics.File.write fname (tm_seq2int_seq fi lst) ;
       tmUnit
-  | CwriteFile None, _ | CwriteFile (Some _), _ ->
+  | CwriteFile (Some _), _ ->
+      fail_constapp fi
+  | CwriteFile None, _ ->
       fail_constapp fi
   | CfileExists, TmSeq (fi, lst) ->
-      TmConst (fi, CBool (Intrinsics.File.exists (tmseq2ustring fi lst)))
+      TmConst (fi, CBool (Intrinsics.File.exists (tm_seq2int_seq fi lst)))
   | CfileExists, _ ->
       fail_constapp fi
   | CdeleteFile, TmSeq (fi, lst) ->
-      Intrinsics.File.delete (tmseq2ustring fi lst) ;
+      Intrinsics.File.delete (tm_seq2int_seq fi lst) ;
       tmUnit
   | CdeleteFile, _ ->
       fail_constapp fi
@@ -968,60 +1011,56 @@ let delta eval env fi c v =
   | CMap _, _ ->
       fail_constapp fi
   | CmapEmpty, cmp ->
-      let compare x y =
-        let app = TmApp (fi, TmApp (fi, cmp, x), y) in
-        match eval env app with
-        | TmConst (_, CInt i) ->
-            i
-        | _ ->
-            fail_constapp fi
-      in
-      let module Ord = struct
-        type t = tm
-
-        let compare = compare
-      end in
-      let module MapModule = Map.Make (Ord) in
-      TmConst (fi, CMap (compare, Obj.repr MapModule.empty))
+      TmConst (fi, CMap (cmp, Mmap.empty (mapCompare cmp)))
+  | CmapSize, TmConst (_, CMap (_, m)) ->
+      TmConst (fi, CInt (Mmap.size m))
+  | CmapSize, _ ->
+      fail_constapp fi
+  | CmapGetCmpFun, TmConst (_, CMap (cmp, _)) ->
+      cmp
+  | CmapGetCmpFun, _ ->
+      fail_constapp fi
   | CmapInsert (None, None), key ->
       TmConst (fi, CmapInsert (Some key, None))
   | CmapInsert (Some key, None), v ->
       TmConst (fi, CmapInsert (Some key, Some v))
   | CmapInsert (Some k, Some v), TmConst (_, CMap (cmp, m)) ->
-      let module Ord = struct
-        type t = tm
-
-        let compare = cmp
-      end in
-      let module MapModule = Map.Make (Ord) in
-      let m = MapModule.add k v (Obj.obj m) in
-      TmConst (fi, CMap (cmp, Obj.repr m))
+      TmConst (fi, CMap (cmp, Mmap.insert k v m))
   | CmapInsert (Some _, Some _), _ | CmapInsert (None, Some _), _ ->
       fail_constapp fi
   | CmapRemove None, key ->
       TmConst (fi, CmapRemove (Some key))
   | CmapRemove (Some k), TmConst (_, CMap (cmp, m)) ->
-      let module Ord = struct
-        type t = tm
-
-        let compare = cmp
-      end in
-      let module MapModule = Map.Make (Ord) in
-      let m = MapModule.remove k (Obj.obj m) in
-      TmConst (fi, CMap (cmp, Obj.repr m))
+      TmConst (fi, CMap (cmp, Mmap.remove k m))
   | CmapRemove (Some _), _ ->
       fail_constapp fi
-  | CmapFind None, t ->
-      TmConst (fi, CmapFind (Some t))
-  | CmapFind (Some k), TmConst (_, CMap (cmp, mp)) ->
-      let module Ord = struct
-        type t = tm
-
-        let compare = cmp
-      end in
-      let module MapModule = Map.Make (Ord) in
-      MapModule.find k (Obj.obj mp)
-  | CmapFind (Some _), _ ->
+  | CmapFindWithExn None, k ->
+      TmConst (fi, CmapFindWithExn (Some k))
+  | CmapFindWithExn (Some k), TmConst (_, CMap (_, m)) ->
+      Mmap.find k m
+  | CmapFindWithExn (Some _), _ ->
+      fail_constapp fi
+  | CmapFindOrElse (None, None), f ->
+      TmConst (fi, CmapFindOrElse (Some f, None))
+  | CmapFindOrElse (Some f, None), k ->
+      TmConst (fi, CmapFindOrElse (Some f, Some k))
+  | CmapFindOrElse (Some f, Some k), TmConst (_, CMap (_, m)) ->
+      let f () = eval env (TmApp (fi, f, tmUnit)) in
+      Mmap.find_or_else f k m
+  | CmapFindOrElse _, _ ->
+      fail_constapp fi
+  | CmapFindApplyOrElse (None, None, None), f ->
+      TmConst (fi, CmapFindApplyOrElse (Some f, None, None))
+  | CmapFindApplyOrElse (Some f, None, None), felse ->
+      TmConst (fi, CmapFindApplyOrElse (Some f, Some felse, None))
+  | CmapFindApplyOrElse (Some f, Some felse, None), k ->
+      TmConst (fi, CmapFindApplyOrElse (Some f, Some felse, Some k))
+  | CmapFindApplyOrElse (Some f, Some felse, Some k), TmConst (_, CMap (_, m))
+    ->
+      let f v = eval env (TmApp (fi, f, v)) in
+      let felse () = eval env (TmApp (fi, felse, tmUnit)) in
+      Mmap.find_apply_or_else f felse k m
+  | CmapFindApplyOrElse _, _ ->
       fail_constapp fi
   | CmapAny None, p ->
       let pred x y =
@@ -1033,73 +1072,80 @@ let delta eval env fi c v =
             fail_constapp fi
       in
       TmConst (fi, CmapAny (Some pred))
-  | CmapAny (Some p), TmConst (_, CMap (cmp, m)) ->
-      let module Ord = struct
-        type t = tm
-
-        let compare = cmp
-      end in
-      let module MapModule = Map.Make (Ord) in
-      TmConst (fi, CBool (MapModule.exists p (Obj.obj m)))
+  | CmapAny (Some p), TmConst (_, CMap (_, m)) ->
+      TmConst (fi, CBool (Mmap.any p m))
   | CmapAny (Some _), _ ->
       fail_constapp fi
   | CmapMem None, key ->
       TmConst (fi, CmapMem (Some key))
-  | CmapMem (Some k), TmConst (_, CMap (cmp, m)) ->
-      let module Ord = struct
-        type t = tm
-
-        let compare = cmp
-      end in
-      let module MapModule = Map.Make (Ord) in
-      TmConst (fi, CBool (MapModule.mem k (Obj.obj m)))
+  | CmapMem (Some k), TmConst (_, CMap (_, m)) ->
+      TmConst (fi, CBool (Mmap.mem k m))
   | CmapMem (Some _), _ ->
       fail_constapp fi
   | CmapMap None, f ->
       let mapf x = eval env (TmApp (fi, f, x)) in
       TmConst (fi, CmapMap (Some mapf))
   | CmapMap (Some f), TmConst (_, CMap (cmp, m)) ->
-      let module Ord = struct
-        type t = tm
-
-        let compare = cmp
-      end in
-      let module MapModule = Map.Make (Ord) in
-      let m = MapModule.map f (Obj.obj m) in
-      TmConst (fi, CMap (cmp, Obj.repr m))
+      TmConst (fi, CMap (cmp, Mmap.map f m))
   | CmapMap (Some _), _ ->
       fail_constapp fi
   | CmapMapWithKey None, f ->
       let mapf k v = TmApp (fi, TmApp (fi, f, k), v) |> eval env in
       TmConst (fi, CmapMapWithKey (Some mapf))
   | CmapMapWithKey (Some f), TmConst (_, CMap (cmp, m)) ->
-      let module Ord = struct
-        type t = tm
-
-        let compare = cmp
-      end in
-      let module MapModule = Map.Make (Ord) in
-      let m = MapModule.mapi f (Obj.obj m) in
-      TmConst (fi, CMap (cmp, Obj.repr m))
+      TmConst (fi, CMap (cmp, Mmap.map_with_key f m))
   | CmapMapWithKey (Some _), _ ->
       fail_constapp fi
-  | CmapBindings, TmConst (_, CMap (cmp, m)) ->
-      let module Ord = struct
-        type t = tm
-
-        let compare = cmp
-      end in
-      let module MapModule = Map.Make (Ord) in
-      let binds =
-        MapModule.bindings (Obj.obj m)
-        |> List.map (fun (k, v) -> tuple2record fi [k; v])
+  | CmapFoldWithKey (None, None), f ->
+      let foldf acc k v =
+        TmApp (fi, TmApp (fi, TmApp (fi, f, acc), k), v) |> eval env
       in
-      TmSeq (fi, Mseq.Helpers.of_list binds)
+      TmConst (fi, CmapFoldWithKey (Some foldf, None))
+  | CmapFoldWithKey (Some f, None), acc ->
+      TmConst (fi, CmapFoldWithKey (Some f, Some acc))
+  | CmapFoldWithKey (Some f, Some acc), TmConst (_, CMap (_, m)) ->
+      Mmap.fold_with_key f acc m
+  | CmapFoldWithKey _, _ ->
+      fail_constapp fi
+  | CmapBindings, TmConst (_, CMap (_, m)) ->
+      let binds =
+        Mmap.bindings m
+        |> Mseq.Helpers.map (fun (k, v) -> tuple2record fi [k; v])
+      in
+      TmSeq (fi, binds)
   | CmapBindings, _ ->
       fail_constapp fi
-  (* MCore intrinsics: Tensors *)
-  | CTensor _, _ ->
+  | CmapEq (None, None), f ->
+      let veq v1 v2 =
+        match TmApp (fi, TmApp (fi, f, v1), v2) |> eval env with
+        | TmConst (_, CBool b) ->
+            b
+        | _ ->
+            fail_constapp fi
+      in
+      TmConst (fi, CmapEq (Some veq, None))
+  | CmapEq (Some veq, None), TmConst (_, CMap (kcmp, m1)) ->
+      TmConst (fi, CmapEq (Some veq, Some (kcmp, m1)))
+  | CmapEq (Some veq, Some (_, m1)), TmConst (_, CMap (_, m2)) ->
+      TmConst (fi, CBool (Mmap.eq veq m1 m2))
+  | CmapEq _, _ ->
       fail_constapp fi
+  | CmapCmp (None, None), f ->
+      let vcmp v1 v2 =
+        match TmApp (fi, TmApp (fi, f, v1), v2) |> eval env with
+        | TmConst (_, CInt i) ->
+            i
+        | _ ->
+            fail_constapp fi
+      in
+      TmConst (fi, CmapCmp (Some vcmp, None))
+  | CmapCmp (Some vcmp, None), TmConst (_, CMap (kcmp, m1)) ->
+      TmConst (fi, CmapCmp (Some vcmp, Some (kcmp, m1)))
+  | CmapCmp (Some vcmp, Some (_, m1)), TmConst (_, CMap (_, m2)) ->
+      TmConst (fi, CInt (Mmap.cmp vcmp m1 m2))
+  | CmapCmp _, _ ->
+      fail_constapp fi
+  (* MCore intrinsics: Tensors *)
   | CtensorCreate None, TmSeq (_, seq) ->
       let shape = tm_seq2int_array fi seq in
       TmConst (fi, CtensorCreate (Some shape))
@@ -1139,10 +1185,10 @@ let delta eval env fi c v =
            | tm ->
                let f' is = if is = is0 then tm else f is in
                Tensor.NoNum.create shape f' |> T.no_num )
-      |> fun t -> TmConst (fi, CTensor t)
+      |> fun t -> TmTensor (fi, t)
   | CtensorCreate _, _ ->
       fail_constapp fi
-  | CtensorGetExn None, TmConst (_, CTensor t) ->
+  | CtensorGetExn None, TmTensor (_, t) ->
       TmConst (fi, CtensorGetExn (Some t))
   | CtensorGetExn (Some t), TmSeq (_, seq) -> (
       let is = tm_seq2int_array fi seq in
@@ -1158,7 +1204,7 @@ let delta eval env fi c v =
       with Invalid_argument msg -> raise_error fi msg )
   | CtensorGetExn _, _ ->
       fail_constapp fi
-  | CtensorSetExn (None, None), TmConst (_, CTensor t) ->
+  | CtensorSetExn (None, None), TmTensor (_, t) ->
       TmConst (fi, CtensorSetExn (Some t, None))
   | CtensorSetExn (Some t, None), TmSeq (_, seq) ->
       let is = tm_seq2int_array fi seq in
@@ -1176,7 +1222,7 @@ let delta eval env fi c v =
     with Invalid_argument msg -> raise_error fi msg )
   | CtensorSetExn _, _ ->
       fail_constapp fi
-  | CtensorRank, TmConst (_, CTensor t) ->
+  | CtensorRank, TmTensor (_, t) ->
       let n =
         t
         |> function
@@ -1190,7 +1236,7 @@ let delta eval env fi c v =
       TmConst (fi, CInt n)
   | CtensorRank, _ ->
       fail_constapp fi
-  | CtensorShape, TmConst (_, CTensor t) ->
+  | CtensorShape, TmTensor (_, t) ->
       let shape =
         t
         |> function
@@ -1204,18 +1250,18 @@ let delta eval env fi c v =
       int_array2tm_seq fi shape
   | CtensorShape, _ ->
       fail_constapp fi
-  | CtensorCopyExn None, TmConst (_, CTensor t1) ->
+  | CtensorCopyExn None, TmTensor (_, t1) ->
       TmConst (fi, CtensorCopyExn (Some t1))
-  | CtensorCopyExn (Some (T.Int t1)), TmConst (_, CTensor (T.Int t2)) ->
+  | CtensorCopyExn (Some (T.Int t1)), TmTensor (_, T.Int t2) ->
       Tensor.Num.copy_exn t1 t2 ; tmUnit
-  | CtensorCopyExn (Some (T.Float t1)), TmConst (_, CTensor (T.Float t2)) ->
+  | CtensorCopyExn (Some (T.Float t1)), TmTensor (_, T.Float t2) ->
       Tensor.Num.copy_exn t1 t2 ; tmUnit
-  | CtensorCopyExn (Some (T.NoNum t1)), TmConst (_, CTensor (T.NoNum t2)) ->
+  | CtensorCopyExn (Some (T.NoNum t1)), TmTensor (_, T.NoNum t2) ->
       Tensor.NoNum.copy_exn t1 t2 ;
       tmUnit
   | CtensorCopyExn _, _ ->
       fail_constapp fi
-  | CtensorReshapeExn None, TmConst (_, CTensor t) ->
+  | CtensorReshapeExn None, TmTensor (_, t) ->
       TmConst (fi, CtensorReshapeExn (Some t))
   | CtensorReshapeExn (Some t), TmSeq (_, seq) -> (
       let is = tm_seq2int_array fi seq in
@@ -1230,11 +1276,11 @@ let delta eval env fi c v =
           | T.NoNum t'' ->
               Tensor.NoNum.reshape_exn t'' is |> T.no_num
         in
-        TmConst (fi, CTensor t')
+        TmTensor (fi, t')
       with Invalid_argument msg -> raise_error fi msg )
   | CtensorReshapeExn _, _ ->
       fail_constapp fi
-  | CtensorSliceExn None, TmConst (_, CTensor t) ->
+  | CtensorSliceExn None, TmTensor (_, t) ->
       TmConst (fi, CtensorSliceExn (Some t))
   | CtensorSliceExn (Some t), TmSeq (_, seq) -> (
       let is = tm_seq2int_array fi seq in
@@ -1249,11 +1295,11 @@ let delta eval env fi c v =
           | T.NoNum t'' ->
               Tensor.NoNum.slice_exn t'' is |> T.no_num
         in
-        TmConst (fi, CTensor t')
+        TmTensor (fi, t')
       with Invalid_argument msg -> raise_error fi msg )
   | CtensorSliceExn _, _ ->
       fail_constapp fi
-  | CtensorSubExn (None, None), TmConst (_, CTensor t) ->
+  | CtensorSubExn (None, None), TmTensor (_, t) ->
       TmConst (fi, CtensorSubExn (Some t, None))
   | CtensorSubExn (Some t, None), TmConst (_, CInt ofs) ->
       TmConst (fi, CtensorSubExn (Some t, Some ofs))
@@ -1269,19 +1315,17 @@ let delta eval env fi c v =
         | T.NoNum t'' ->
             Tensor.NoNum.sub_exn t'' ofs len |> T.no_num
       in
-      TmConst (fi, CTensor t')
+      TmTensor (fi, t')
     with Invalid_argument msg -> raise_error fi msg )
   | CtensorSubExn _, _ ->
       fail_constapp fi
   | CtensorIteri None, tm ->
       TmConst (fi, CtensorIteri (Some tm))
-  | CtensorIteri (Some tm), TmConst (_, CTensor t) -> (
+  | CtensorIteri (Some tm), TmTensor (_, t) -> (
       let iterf tkind i t =
         let _ =
           TmApp
-            ( fi
-            , TmApp (fi, tm, TmConst (fi, CInt i))
-            , TmConst (fi, CTensor (tkind t)) )
+            (fi, TmApp (fi, tm, TmConst (fi, CInt i)), TmTensor (fi, tkind t))
           |> eval env
         in
         ()
@@ -1303,9 +1347,16 @@ let delta eval env fi c v =
   | CbootParserTree _, _ ->
       fail_constapp fi
   | CbootParserParseMExprString, TmSeq (fi, seq) ->
-      let t = Bootparser.parseMExprString (tmseq2ustring fi seq) in
+      let t = Parserutils.parse_mexpr_string (tmseq2ustring fi seq) in
       TmConst (fi, CbootParserTree (PTreeTm t))
   | CbootParserParseMExprString, _ ->
+      fail_constapp fi
+  | CbootParserParseMCoreFile, TmSeq (fi, seq) ->
+      let t = Parserutils.parse_mcore_file (tmseq2ustring fi seq) in
+      (* Call symbolize just to get better error messages *)
+      (* let _ = symbolize builtin_name2sym t in *)
+      TmConst (fi, CbootParserTree (PTreeTm t))
+  | CbootParserParseMCoreFile, _ ->
       fail_constapp fi
   | CbootParserGetId, TmConst (fi, CbootParserTree ptree) ->
       TmConst (fi, CInt (Bootparser.getId ptree))
@@ -1317,6 +1368,13 @@ let delta eval env fi c v =
     , TmConst (_, CInt n) ) ->
       TmConst (fi, CbootParserTree (Bootparser.getTerm ptree n))
   | CbootParserGetTerm (Some _), _ ->
+      fail_constapp fi
+  | CbootParserGetType None, t ->
+      TmConst (fi, CbootParserGetType (Some t))
+  | ( CbootParserGetType (Some (TmConst (fi, CbootParserTree ptree)))
+    , TmConst (_, CInt n) ) ->
+      TmConst (fi, CbootParserTree (Bootparser.getType ptree n))
+  | CbootParserGetType (Some _), _ ->
       fail_constapp fi
   | CbootParserGetString None, t ->
       TmConst (fi, CbootParserGetString (Some t))
@@ -1463,6 +1521,12 @@ let rec val_equal v1 v2 =
       c1 = c2
   | TmConApp (_, _, sym1, v1), TmConApp (_, _, sym2, v2) ->
       sym1 = sym2 && val_equal v1 v2
+  | TmTensor (_, T.Int t1), TmTensor (_, T.Int t2) ->
+      t1 = t2
+  | TmTensor (_, T.Float t1), TmTensor (_, T.Float t2) ->
+      t1 = t2
+  | TmTensor (_, T.NoNum t1), TmTensor (_, T.NoNum t2) ->
+      Tensor.NoNum.equal val_equal t1 t2
   | _ ->
       false
 
@@ -1642,10 +1706,6 @@ let rec symbolize (env : (ident * Symb.t) list) (t : tm) =
         , symbolize env2 tm )
   | TmApp (fi, t1, t2) ->
       TmApp (fi, symbolize env t1, symbolize env t2)
-  | TmConst (_, _) ->
-      t
-  | TmFix _ ->
-      t
   | TmSeq (fi, tms) ->
       TmSeq (fi, Mseq.Helpers.map (symbolize env) tms)
   | TmRecord (fi, r) ->
@@ -1677,9 +1737,7 @@ let rec symbolize (env : (ident * Symb.t) list) (t : tm) =
       let sym_using = Option.map (fun t -> symbolize env t) tusing in
       TmUtest
         (fi, symbolize env t1, symbolize env t2, sym_using, symbolize env tnext)
-  | TmNever _ ->
-      t
-  | TmRef _ ->
+  | TmConst _ | TmFix _ | TmNever _ | TmRef _ | TmTensor _ ->
       t
 
 (* Same as symbolize, but records all toplevel definitions and returns them
@@ -1739,7 +1797,8 @@ let rec symbolize_toplevel (env : (ident * Symb.t) list) = function
     | TmNever _
     | TmClos _
     | TmFix _
-    | TmRef _ ) as t ->
+    | TmRef _
+    | TmTensor _ ) as t ->
       (env, symbolize env t)
 
 let rec try_match env value pat =
@@ -1856,20 +1915,22 @@ let rec eval (env : (Symb.t * tm) list) (t : tm) =
     (* Closure application *)
     | TmClos (ficlos, _, s, t3, env2) -> (
         if !enable_debug_profiling then (
-          let t1 = get_wall_time_ms () in
+          let t1 = Time.get_wall_time_ms () in
           let res =
             try eval ((s, eval env t2) :: Lazy.force env2) t3
             with e ->
-              uprint_endline (us "TRACE: " ^. info2str fiapp) ;
+              if !enable_debug_stack_trace then
+                uprint_endline (us "TRACE: " ^. info2str fiapp) ;
               raise e
           in
-          let t2 = get_wall_time_ms () in
+          let t2 = Time.get_wall_time_ms () in
           add_call ficlos (t2 -. t1) ;
           res )
         else
           try eval ((s, eval env t2) :: Lazy.force env2) t3
           with e ->
-            uprint_endline (us "TRACE: " ^. info2str fiapp) ;
+            if !enable_debug_stack_trace then
+              uprint_endline (us "TRACE: " ^. info2str fiapp) ;
             raise e )
     (* Constant application using the delta function *)
     | TmConst (_, c) ->
@@ -1985,14 +2046,8 @@ let rec eval (env : (Symb.t * tm) list) (t : tm) =
   (* Use *)
   | TmUse (fi, _, _) ->
       raise_error fi "A 'use' of a language was not desugared"
-  (* Closure - Only at runtime *)
-  | TmClos (_, _, _, _, _) ->
-      t
-  (* Fix-point - Only at runtime *)
-  | TmFix _ ->
-      t
-  (* Ref - Only at runtime *)
-  | TmRef _ ->
+  (* Only at runtime *)
+  | TmClos _ | TmFix _ | TmRef _ | TmTensor _ ->
       t
 
 (* Same as eval, but records all toplevel definitions and returns them along
@@ -2033,5 +2088,6 @@ let rec eval_toplevel (env : (Symb.t * tm) list) = function
     | TmUse _
     | TmUtest _
     | TmNever _
-    | TmRef _ ) as t ->
+    | TmRef _
+    | TmTensor _ ) as t ->
       (env, eval env t)
