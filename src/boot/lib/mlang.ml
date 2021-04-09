@@ -348,6 +348,12 @@ let delete_id ({normals; _} as env) ident =
 let delete_con ({constructors; _} as env) ident =
   {env with constructors= USMap.remove ident constructors}
 
+module USSet = Set.Make (Ustring)
+
+let used_langs = ref USSet.empty
+
+let add_use name = used_langs := USSet.add name !used_langs
+
 let rec desugar_tm nss env =
   let map_right f (a, b) = (a, f b) in
   function
@@ -452,12 +458,13 @@ let rec desugar_tm nss env =
         , desugar_tm nss env els )
   (* Use *)
   | TmUse (fi, name, body) -> (
-    match USMap.find_opt name nss with
-    | None ->
-        raise_error fi
-          ("Unknown language fragment '" ^ Ustring.to_utf8 name ^ "'")
-    | Some ns ->
-        desugar_tm nss (merge_env_overwrite env ns) body )
+      add_use name ;
+      match USMap.find_opt name nss with
+      | None ->
+          raise_error fi
+            ("Unknown language fragment '" ^ Ustring.to_utf8 name ^ "'")
+      | Some ns ->
+          desugar_tm nss (merge_env_overwrite env ns) body )
   (* Simple recursions *)
   | TmApp (fi, a, b) ->
       TmApp (fi, desugar_tm nss env a, desugar_tm nss env b)
@@ -593,6 +600,37 @@ let desugar_top (nss, syns, (stack : (tm -> tm) list)) = function
       let wrap tm' = TmUtest (fi, lhs, rhs, using, tm') in
       (nss, syns, wrap :: stack)
 
+let eliminate_non_used used t =
+  match t with
+  | TmRecLets (_fi, lst, _tm) -> (
+      let get_inter lst =
+        let prefixes =
+          List.map
+            (fun (_, us, _, _, _) ->
+              match String.split_on_char '_' (Ustring.to_utf8 us) with
+              | [] ->
+                  None
+              | x :: _ ->
+                  if String.length x > 0 && x = String.capitalize_ascii x then
+                    Some x
+                  else None )
+            lst
+        in
+        match prefixes with [] -> None | x :: _ -> x
+      in
+      match get_inter lst with
+      | Some inter ->
+          if USSet.mem (Ustring.from_utf8 inter) used then t
+          else
+            (* ( Printf.printf "Removing inter: %s\n" inter ; *)
+            (* TmRecLets (_fi, [], _tm) *)
+            _tm
+            (* t *)
+      | None ->
+          t )
+  | t ->
+      t
+
 let desugar_post_flatten_with_nss nss (Program (_, tops, t)) =
   let acc_start = (nss, USMap.empty, []) in
   let new_nss, syns, stack = List.fold_left desugar_top acc_start tops in
@@ -606,7 +644,8 @@ let desugar_post_flatten_with_nss nss (Program (_, tops, t)) =
   let desugared_tm =
     List.fold_left ( |> ) (desugar_tm new_nss emptyMlangEnv t) stack
   in
-  (new_nss, desugared_tm)
+  let eliminated_tm = map_tm (eliminate_non_used !used_langs) desugared_tm in
+  (new_nss, eliminated_tm)
 
 (* Desugar top level statements after flattening language fragments. *)
 let desugar_post_flatten prg =
