@@ -354,6 +354,16 @@ let used_langs = ref USSet.empty
 
 let add_use name = used_langs := USSet.add name !used_langs
 
+module SymMap = Map.Make (struct
+  type t = Symb.t
+
+  let compare s1 s2 = Symb.hash s1 - Symb.hash s2
+end)
+
+let lang_inters = ref SymMap.empty
+
+let add_inter sym name = lang_inters := SymMap.add sym name !lang_inters
+
 let rec desugar_tm nss env =
   let map_right f (a, b) = (a, f b) in
   function
@@ -546,10 +556,12 @@ let desugar_top (nss, syns, (stack : (tm -> tm) list)) = function
       in
       let translate_inter = function
         | Inter (fi, name, params, cases) ->
+            let sym = Symb.gensym () in
+            add_inter sym langName ;
             Some
               ( fi
               , mangle name
-              , Symb.Helpers.nosym
+              , sym
               , TyUnknown NoInfo
               , inter_to_tm name fi params cases )
         | _ ->
@@ -602,30 +614,16 @@ let desugar_top (nss, syns, (stack : (tm -> tm) list)) = function
 
 let eliminate_non_used used t =
   match t with
-  | TmRecLets (_fi, lst, _tm) -> (
-      let get_inter lst =
-        let prefixes =
-          List.map
-            (fun (_, us, _, _, _) ->
-              match String.split_on_char '_' (Ustring.to_utf8 us) with
-              | [] ->
-                  None
-              | x :: _ ->
-                  if String.length x > 0 && x = String.capitalize_ascii x then
-                    Some x
-                  else None )
-            lst
-        in
-        match prefixes with [] -> None | x :: _ -> x
+  | TmRecLets (_, lst, inexpr) -> (
+      let get_inter = function
+        | [] ->
+            None
+        | (_, _, sym, _, _) :: _ ->
+            SymMap.find_opt sym !lang_inters
       in
       match get_inter lst with
       | Some inter ->
-          if USSet.mem (Ustring.from_utf8 inter) used then t
-          else
-            (* ( Printf.printf "Removing inter: %s\n" inter ; *)
-            (* TmRecLets (_fi, [], _tm) *)
-            _tm
-            (* t *)
+          if USSet.mem inter used then t else inexpr
       | None ->
           t )
   | t ->
