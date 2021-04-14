@@ -11,6 +11,7 @@ include "mexpr/type-lift.mc"
 include "ocaml/ast.mc"
 include "ocaml/pprint.mc"
 include "ocaml/compile.mc"
+include "common.mc"
 
 type GenerateEnv = {
   constrs : Map Name Type,
@@ -97,15 +98,37 @@ lang OCamlGenerate = MExprAst + OCamlAst
   sem generate (env : GenerateEnv) =
   | TmSeq {tms = tms} ->
     app_ (nvar_ (_intrinsicName "ofArray")) (OTmArray {tms = map (generate env) tms})
-  | TmMatch {target = target, pat = pat, thn = thn, els = els} ->
+  | TmMatch t ->
     let tname = nameSym "_target" in
-    match generatePat env (ty target) tname pat with (nameMap, wrap) then
+    let targetTy =
+      let ty = ty t.target in
+      -- If we don't know the type of the target and the pattern describes a
+      -- tuple, then we assume the target has that type. We do this to
+      -- eliminate the need to add type annotations when matching on tuples,
+      -- which happens frequently.
+      match ty with TyUnknown _ then
+        match t.pat with PatRecord {bindings = bindings} then
+          match _record2tuple bindings with Some _ then
+            let bindingTypes = mapMap (lam. tyunknown_) bindings in
+            match mapLookup bindingTypes env.records with Some id then
+              ntyvar_ id
+            else
+              let msg = join [
+                "Pattern specifies undefined tuple type.\n",
+                "This was caused by an error in type-lifting."
+              ] in
+              infoErrorExit t.info msg
+          else ty
+        else ty
+      else ty
+    in
+    match generatePat env targetTy tname t.pat with (nameMap, wrap) then
       match _mkFinalPatExpr nameMap with (pat, expr) then
         _optMatch
-          (bind_ (nulet_ tname (generate env target)) (wrap (_some expr)))
+          (bind_ (nulet_ tname (generate env t.target)) (wrap (_some expr)))
           pat
-          (generate env thn)
-          (generate env els)
+          (generate env t.thn)
+          (generate env t.els)
       else never
     else never
   | TmRecord t ->
@@ -222,9 +245,14 @@ lang OCamlGenerate = MExprAst + OCamlAst
   | PatChar {val = val} ->
     (assocEmpty, lam cont. _if (eqc_ (nvar_ targetName) (char_ val)) cont _none)
   | PatSeqTot {pats = pats} ->
+    let elemTy =
+      match targetTy with TySeq {ty = elemTy} then
+        elemTy
+      else tyunknown_
+    in
     let genOne = lam i. lam pat.
       let n = nameSym "_seqElem" in
-      match generatePat env targetTy n pat with (names, innerWrap) then
+      match generatePat env elemTy n pat with (names, innerWrap) then
         let wrap = lam cont.
           bind_
             (nlet_ n tyunknown_ (get_ (nvar_ targetName) (int_ i)))
@@ -248,9 +276,14 @@ lang OCamlGenerate = MExprAst + OCamlAst
     let tempName = nameSym "_splitTemp" in
     let midName = nameSym "_middle" in
     let postName = nameSym "_postfix" in
+    let elemTy =
+      match targetTy with TySeq {ty = elemTy} then
+        elemTy
+      else tyunknown_
+    in
     let genOne = lam targetName. lam i. lam pat.
       let n = nameSym "_seqElem" in
-      match generatePat env targetTy n pat with (names, innerWrap) then
+      match generatePat env elemTy n pat with (names, innerWrap) then
         let wrap = lam cont.
           bind_
             (nlet_ n tyunknown_ (get_ (nvar_ targetName) (int_ i)))
@@ -723,35 +756,39 @@ lang OCamlObjWrap = MExprAst + OCamlAst
   | CDeRef _ -> nvar_ (_intrinsicName "deref")
   | t -> dprintLn t; error "Intrinsic not implemented"
 
-  sem objWrapRec =
+  sem objWrapRec (isApp : Bool) =
   | (TmConst {val = (CInt _) | (CFloat _) | (CChar _) | (CBool _)}) & t ->
     _objRepr t
   | TmConst {val = c} -> intrinsic2name c
   | TmApp t ->
     if _isIntrinsicApp (TmApp t) then
-      TmApp {{t with lhs = objWrapRec t.lhs}
-                with rhs = _objRepr (objWrapRec t.rhs)}
+      TmApp {{t with lhs = objWrapRec true t.lhs}
+                with rhs = _objRepr (objWrapRec false t.rhs)}
     else
-      TmApp {{t with lhs = objWrapRec t.lhs}
-                with rhs = objWrapRec t.rhs}
+      TmApp {{t with lhs =
+                  if isApp then
+                    objWrapRec true t.lhs
+                  else
+                    _objObj (_objRepr (objWrapRec true t.lhs))}
+                with rhs = objWrapRec false t.rhs}
   | TmRecord t ->
     if mapIsEmpty t.bindings then
       _objRepr (TmRecord t)
     else
-      let bindings = mapMap (lam expr. objWrapRec expr) t.bindings in
+      let bindings = mapMap (lam expr. objWrapRec false expr) t.bindings in
       TmRecord {t with bindings = bindings}
-  | (OTmArray _) & t -> _objRepr (smap_Expr_Expr objWrapRec t)
-  | (OTmConApp _) & t -> _objRepr (smap_Expr_Expr objWrapRec t)
+  | (OTmArray _) & t -> _objRepr (smap_Expr_Expr (objWrapRec false) t)
+  | (OTmConApp _) & t -> _objRepr (smap_Expr_Expr (objWrapRec false) t)
   | OTmMatch t ->
     _objObj
-    (OTmMatch {{t with target = _objObj (objWrapRec t.target)}
-                  with arms = map (lam p. (p.0, _objRepr (objWrapRec p.1))) t.arms})
-  | t -> smap_Expr_Expr objWrapRec t
+    (OTmMatch {{t with target = _objObj (objWrapRec false t.target)}
+                  with arms = map (lam p. (p.0, _objRepr (objWrapRec false p.1))) t.arms})
+  | t -> smap_Expr_Expr (objWrapRec false) t
 
   sem objWrap =
   | OTmVariantTypeDecl t ->
     OTmVariantTypeDecl {t with inexpr = objWrap t.inexpr}
-  | t -> objWrapRec (_objObj t)
+  | t -> _objObj (objWrapRec false t)
 end
 
 lang OCamlTest = OCamlGenerate + OCamlTypeDeclGenerate + OCamlPrettyPrint +
@@ -1581,6 +1618,16 @@ utest int_ 2 with generateEmptyEnv (length_ testSubseq1) using sameSemantics in
 utest int_ 2 with generateEmptyEnv (length_ testSubseq2) using sameSemantics in
 utest int_ 1 with generateEmptyEnv (length_ testSubseq3) using sameSemantics in
 utest int_ 3 with generateEmptyEnv fst using sameSemantics in
+
+let testGetFun = bindall_
+[ ulet_ "lst" (seq_ [ulam_ "x" (var_ "x")])
+, ulet_ "f" (get_ (var_ "lst") (int_ 0))
+, ulet_ "_" (app_ (var_ "f") (int_ 1))
+, ulet_ "_" (app_ (ulam_ "x" (var_ "x")) (app_ (var_ "f") (int_ 1)))
+, ulet_ "_" (addi_ (app_ (var_ "f") (int_ 1)) (int_ 1))
+, int_ 1
+] in
+utest int_ 1 with generateEmptyEnv testGetFun using sameSemantics in
 
 -- splitat
 let testStr = str_ "foobar" in

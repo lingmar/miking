@@ -8,6 +8,7 @@ include "anf.mc"
 include "name.mc"
 include "hashmap.mc"
 include "eq.mc"
+include "common.mc"
 
 -- This file contains implementations related to decision points.
 
