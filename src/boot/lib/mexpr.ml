@@ -694,21 +694,21 @@ let delta eval env fi c v =
       TmConst (fi, CcreateFingerTree (Some n))
   | CcreateFingerTree (Some n), f ->
       let createf i = eval env (TmApp (fi, f, TmConst (NoInfo, CInt i))) in
-      TmSeq (tm_info f, Mseq.create_fingertree n createf)
+      TmSeq (tm_info f, Mseq.create n createf)
   | CcreateFingerTree None, _ ->
       fail_constapp fi
   | CcreateList None, TmConst (_, CInt n) ->
       TmConst (fi, CcreateList (Some n))
   | CcreateList (Some n), f ->
       let createf i = eval env (TmApp (fi, f, TmConst (NoInfo, CInt i))) in
-      TmSeq (tm_info f, Mseq.create_list n createf)
+      TmSeq (tm_info f, Mseq.create n createf)
   | CcreateList None, _ ->
       fail_constapp fi
   | CcreateRope None, TmConst (_, CInt n) ->
       TmConst (fi, CcreateRope (Some n))
   | CcreateRope (Some n), f ->
       let createf i = eval env (TmApp (fi, f, TmConst (NoInfo, CInt i))) in
-      TmSeq (tm_info f, Mseq.create_rope n createf)
+      TmSeq (tm_info f, Mseq.create n createf)
   | CcreateRope None, _ ->
       fail_constapp fi
   | Clength, TmSeq (fi, s) ->
