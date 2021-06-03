@@ -836,101 +836,103 @@ let delta eval env fi c v =
       Mseq.iteri f s ; tm_unit
   | Citeri _, _ ->
       fail_constapp fi
-  | Cfoldl (None, None), f ->
-      (* let f a x = eval env (TmApp (fi, TmApp (fi, f, a), x)) in *)
-      TmConst (fi, Cfoldl (Some f, None))
-  | Cfoldl (Some f, None), a ->
-      TmConst (fi, Cfoldl (Some f, Some a))
-  | Cfoldl (Some f, Some a), TmSeq (_fi2, _s) ->
-      let sym_foldl = Symb.gensym () in
-      let sym_f = Symb.gensym () in
-      let sym_acc = Symb.gensym () in
-      let sym_seq = Symb.gensym () in
-      let ast =
-        TmRecLets
-          ( NoInfo
-          , [ ( NoInfo
-              , Ustring.from_utf8 "foldl"
-              , sym_foldl
-              , TyUnknown NoInfo
-              , TmLam
-                  ( NoInfo
-                  , Ustring.from_utf8 "f"
-                  , sym_f
-                  , TyUnknown NoInfo
-                  , TmLam
-                      ( NoInfo
-                      , Ustring.from_utf8 "acc"
-                      , sym_acc
-                      , TyUnknown NoInfo
-                      , TmLam
-                          ( NoInfo
-                          , Ustring.from_utf8 "seq"
-                          , sym_seq
-                          , TyUnknown NoInfo
-                          , TmMatch
-                              ( NoInfo
-                              , TmApp
-                                  ( NoInfo
-                                  , TmConst (NoInfo, Cnull)
-                                  , TmVar
-                                      (NoInfo, Ustring.from_utf8 "seq", sym_seq)
-                                  )
-                              , PatBool (NoInfo, true)
-                              , TmVar (NoInfo, Ustring.from_utf8 "acc", sym_acc)
-                              , TmApp
-                                  ( NoInfo
-                                  , TmApp
-                                      ( NoInfo
-                                      , TmApp
-                                          ( NoInfo
-                                          , TmVar
-                                              ( NoInfo
-                                              , Ustring.from_utf8 "foldl"
-                                              , sym_foldl )
-                                          , TmVar
-                                              ( NoInfo
-                                              , Ustring.from_utf8 "f"
-                                              , sym_f ) )
-                                      , TmApp
-                                          ( NoInfo
-                                          , TmApp
-                                              ( NoInfo
-                                              , TmVar
-                                                  ( NoInfo
-                                                  , Ustring.from_utf8 "f"
-                                                  , sym_f )
-                                              , TmVar
-                                                  ( NoInfo
-                                                  , Ustring.from_utf8 "acc"
-                                                  , sym_acc ) )
-                                          , TmApp
-                                              ( NoInfo
-                                              , TmConst (NoInfo, Chead)
-                                              , TmVar
-                                                  ( NoInfo
-                                                  , Ustring.from_utf8 "seq"
-                                                  , sym_seq ) ) ) )
-                                  , TmApp
-                                      ( NoInfo
-                                      , TmConst (NoInfo, Ctail)
-                                      , TmVar
-                                          ( NoInfo
-                                          , Ustring.from_utf8 "seq"
-                                          , sym_seq ) ) ) ) ) ) ) ) ]
-          , TmApp
-              ( NoInfo
-              , TmApp
-                  ( NoInfo
-                  , TmApp
-                      ( NoInfo
-                      , TmVar (NoInfo, Ustring.from_utf8 "foldl", sym_foldl)
-                      , f )
-                  , a )
-              , TmSeq (_fi2, _s) ) )
-      in
-      (* !program_output (ustring_of_tm ast) ; *)
-      eval env ast
+  (* | Cfoldl (None, None), f ->
+   *     (\* let f a x = eval env (TmApp (fi, TmApp (fi, f, a), x)) in *\)
+   *     TmConst (fi, Cfoldl (Some f, None))
+   * | Cfoldl (Some f, None), a ->
+   *     TmConst (fi, Cfoldl (Some f, Some a))
+   * | Cfoldl (Some f, Some a), TmSeq (_fi2, _s) ->
+   *     let sym_foldl = Symb.gensym () in
+   *     let sym_f = Symb.gensym () in
+   *     let sym_acc = Symb.gensym () in
+   *     let sym_seq = Symb.gensym () in
+   *     let ast =
+   *       TmRecLets
+   *         ( NoInfo
+   *         , [ ( NoInfo
+   *             , Ustring.from_utf8 "foldl"
+   *             , sym_foldl
+   *             , TyUnknown NoInfo
+   *             , TmLam
+   *                 ( NoInfo
+   *                 , Ustring.from_utf8 "f"
+   *                 , sym_f
+   *                 , TyUnknown NoInfo
+   *                 , TmLam
+   *                     ( NoInfo
+   *                     , Ustring.from_utf8 "acc"
+   *                     , sym_acc
+   *                     , TyUnknown NoInfo
+   *                     , TmLam
+   *                         ( NoInfo
+   *                         , Ustring.from_utf8 "seq"
+   *                         , sym_seq
+   *                         , TyUnknown NoInfo
+   *                         , TmMatch
+   *                             ( NoInfo
+   *                             , TmApp
+   *                                 ( NoInfo
+   *                                 , TmConst (NoInfo, Cnull)
+   *                                 , TmVar
+   *                                     (NoInfo, Ustring.from_utf8 "seq", sym_seq)
+   *                                 )
+   *                             , PatBool (NoInfo, true)
+   *                             , TmVar (NoInfo, Ustring.from_utf8 "acc", sym_acc)
+   *                             , TmApp
+   *                                 ( NoInfo
+   *                                 , TmApp
+   *                                     ( NoInfo
+   *                                     , TmApp
+   *                                         ( NoInfo
+   *                                         , TmVar
+   *                                             ( NoInfo
+   *                                             , Ustring.from_utf8 "foldl"
+   *                                             , sym_foldl )
+   *                                         , TmVar
+   *                                             ( NoInfo
+   *                                             , Ustring.from_utf8 "f"
+   *                                             , sym_f ) )
+   *                                     , TmApp
+   *                                         ( NoInfo
+   *                                         , TmApp
+   *                                             ( NoInfo
+   *                                             , TmVar
+   *                                                 ( NoInfo
+   *                                                 , Ustring.from_utf8 "f"
+   *                                                 , sym_f )
+   *                                             , TmVar
+   *                                                 ( NoInfo
+   *                                                 , Ustring.from_utf8 "acc"
+   *                                                 , sym_acc ) )
+   *                                         , TmApp
+   *                                             ( NoInfo
+   *                                             , TmConst (NoInfo, Chead)
+   *                                             , TmVar
+   *                                                 ( NoInfo
+   *                                                 , Ustring.from_utf8 "seq"
+   *                                                 , sym_seq ) ) ) )
+   *                                 , TmApp
+   *                                     ( NoInfo
+   *                                     , TmConst (NoInfo, Ctail)
+   *                                     , TmVar
+   *                                         ( NoInfo
+   *                                         , Ustring.from_utf8 "seq"
+   *                                         , sym_seq ) ) ) ) ) ) ) ) ]
+   *         , TmApp
+   *             ( NoInfo
+   *             , TmApp
+   *                 ( NoInfo
+   *                 , TmApp
+   *                     ( NoInfo
+   *                     , TmVar (NoInfo, Ustring.from_utf8 "foldl", sym_foldl)
+   *                     , f )
+   *                 , a )
+   *             , TmSeq (_fi2, _s) ) )
+   *     in
+   *     (\* !program_output (ustring_of_tm ast) ; *\)
+   *     eval env ast
+   * | Cfoldl _, _ ->
+   *     fail_constapp fi *)
   | Cfoldl _, _ ->
       fail_constapp fi
   | Csubsequence (None, None), TmSeq (fi, s) ->
@@ -1692,8 +1694,10 @@ let rec eval (env : (Symb.t * tm) list) (t : tm) =
   (* Variables using symbol bindings. Need to evaluate because fix point. *)
   | TmVar (fi, _, s) -> (
     match List.assoc_opt s env with
-    | Some (TmApp (_, TmFix _, _) as t) ->
-        eval env t
+    | Some (TmApp (_, (TmFix _), _) as t) ->
+      eval env t
+    | Some (TmRecLets _ as t) ->
+      eval env t
     | Some t ->
         t
     | None ->
