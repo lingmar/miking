@@ -589,6 +589,7 @@ lang SeqOpAst = SeqAst
   | CIter {}
   | CIteri {}
   | CFoldl {}
+  | CFoldr {}
   | CCreate {}
   | CCreateFingerTree {}
   | CCreateList {}
