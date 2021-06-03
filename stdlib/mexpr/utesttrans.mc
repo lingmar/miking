@@ -78,7 +78,7 @@ recursive
     then true
     else if p (head seq) then all p (tail seq)
     else false
-end
+in
 
 let utestTestPassed = lam.
   print \".\"
@@ -347,7 +347,7 @@ let _pprintSeq = use MExprAst in
         str_ "[",
         appf2_ (var_ "strJoin")
           (str_ ",")
-          (appf2_ (var_ "map") (nvar_ elemPprintFuncName) (var_ "a")),
+          (map_ (nvar_ elemPprintFuncName) (var_ "a")),
         str_ "]"
       ]))
 
