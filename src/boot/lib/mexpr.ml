@@ -845,58 +845,94 @@ let delta eval env fi c v =
   | Cfoldl (Some f, None), a ->
       TmConst (fi, Cfoldl (Some f, Some a))
   | Cfoldl (Some f, Some a), TmSeq (_fi2, _s) ->
+      let sym_foldl = Symb.gensym () in
+      let sym_f = Symb.gensym () in
+      let sym_acc = Symb.gensym () in
+      let sym_seq = Symb.gensym () in
       let ast =
-        parse_mexpr_string
-          (Ustring.from_utf8
-             "\n\
-              recursive\n\
-             \  let foldl = lam f. lam acc. lam seq.\n\
-             \    if null seq then acc\n\
-             \    else foldl f (f acc (head seq)) (tail seq)\n\
-              in ()" )
-        |> Symbolize.symbolize Builtin.builtin_name2sym
-      in
-      let ast =
-        match ast with
-        | TmRecLets (_, [(fi, us, sym, ty, tm)], _) ->
-            let app =
-              TmApp
-                ( NoInfo
-                , TmApp
-                    ( NoInfo
-                    , TmApp
-                        ( NoInfo
-                        , TmVar
-                            ( NoInfo
-                            , Ustring.from_utf8 "foldl"
-                            , sym )
-                        , f )
-                    , a )
-                , TmSeq (_fi2, _s))
-
-              (* TmApp
-               *       ( NoInfo
-               *       , TmApp
-               *           ( NoInfo
-               *           , TmVar
-               *               ( NoInfo
-               *               , Ustring.from_utf8 "foldl"
-               *               , sym )
-               *           , f )
-               *       , a ) *)
-            in
-            TmRecLets (NoInfo, [(fi, us, sym, ty, tm)], app)
-        | _ ->
-            failwith "not a reclet"
+        TmRecLets
+          ( NoInfo
+          , [ ( NoInfo
+              , Ustring.from_utf8 "foldl"
+              , sym_foldl
+              , TyUnknown NoInfo
+              , TmLam
+                  ( NoInfo
+                  , Ustring.from_utf8 "f"
+                  , sym_f
+                  , TyUnknown NoInfo
+                  , TmLam
+                      ( NoInfo
+                      , Ustring.from_utf8 "acc"
+                      , sym_acc
+                      , TyUnknown NoInfo
+                      , TmLam
+                          ( NoInfo
+                          , Ustring.from_utf8 "seq"
+                          , sym_seq
+                          , TyUnknown NoInfo
+                          , TmMatch
+                              ( NoInfo
+                              , TmApp
+                                  ( NoInfo
+                                  , TmConst (NoInfo, Cnull)
+                                  , TmVar
+                                      (NoInfo, Ustring.from_utf8 "seq", sym_seq)
+                                  )
+                              , PatBool (NoInfo, true)
+                              , TmVar (NoInfo, Ustring.from_utf8 "acc", sym_acc)
+                              , TmApp
+                                  ( NoInfo
+                                  , TmApp
+                                      ( NoInfo
+                                      , TmApp
+                                          ( NoInfo
+                                          , TmVar
+                                              ( NoInfo
+                                              , Ustring.from_utf8 "foldl"
+                                              , sym_foldl )
+                                          , TmVar
+                                              ( NoInfo
+                                              , Ustring.from_utf8 "f"
+                                              , sym_f ) )
+                                      , TmApp
+                                          ( NoInfo
+                                          , TmApp
+                                              ( NoInfo
+                                              , TmVar
+                                                  ( NoInfo
+                                                  , Ustring.from_utf8 "f"
+                                                  , sym_f )
+                                              , TmVar
+                                                  ( NoInfo
+                                                  , Ustring.from_utf8 "acc"
+                                                  , sym_acc ) )
+                                          , TmApp
+                                              ( NoInfo
+                                              , TmConst (NoInfo, Chead)
+                                              , TmVar
+                                                  ( NoInfo
+                                                  , Ustring.from_utf8 "seq"
+                                                  , sym_seq ) ) ) )
+                                  , TmApp
+                                      ( NoInfo
+                                      , TmConst (NoInfo, Ctail)
+                                      , TmVar
+                                          ( NoInfo
+                                          , Ustring.from_utf8 "seq"
+                                          , sym_seq ) ) ) ) ) ) ) ) ]
+          , TmApp
+              ( NoInfo
+              , TmApp
+                  ( NoInfo
+                  , TmApp
+                      ( NoInfo
+                      , TmVar (NoInfo, Ustring.from_utf8 "foldl", sym_foldl)
+                      , f )
+                  , a )
+              , TmSeq (_fi2, _s) ) )
       in
       (* !program_output (ustring_of_tm ast) ; *)
-      (* Mseq.Helpers.fold_left f a s *)
-      (* let res = eval env ast in *)
-      (* print_endline "result:"; *)
-      (* !program_output (ustring_of_tm res) ; *)
-      (* let res2 = eval env (TmApp (NoInfo, res, TmSeq (_fi2, _s))) in *)
-      (* print_endline "result2:"; *)
-      (* !program_output (ustring_of_tm res) ; *)
       eval env ast
   | Cfoldl _, _ ->
       fail_constapp fi
