@@ -9,7 +9,6 @@ open Ast
 open Pprint
 open Printf
 open Intrinsics
-open Parserutils
 
 (* This function determines how to print program output.
    It's used to redirect standard output of a program,
@@ -1589,9 +1588,7 @@ let rec eval (env : (Symb.t * tm) list) (t : tm) =
   (* Variables using symbol bindings. Need to evaluate because fix point. *)
   | TmVar (fi, _, s) -> (
     match List.assoc_opt s env with
-    | Some (TmApp (_, TmFix _, _) as t) ->
-        eval env t
-    | Some (TmRecLets _ as t) ->
+    | Some ((TmApp (_, TmFix _, _) | TmRecLets _) as t) ->
         eval env t
     | Some t ->
         t
