@@ -156,13 +156,13 @@ let decisionPointsKeywords =
 , "HoleIntRange"
 ]
 
-let _lookup = lam s : String. lam m : Map String a.
-  mapLookupOrElse (lam. error (concat s " not found")) s m
+let _lookup = lam info : Info. lam s : String. lam m : Map String a.
+  mapLookupOrElse (lam. infoErrorExit info (concat s " not found")) s m
 
-let _expectConstInt = lam s. lam i.
+let _expectConstInt = lam info : Info. lam s. lam i.
   use IntAst in
   match i with TmConst {val = CInt {val = i}} then i
-  else error (concat "Expected a constant integer: " s)
+  else infoErrorExit info (concat "Expected a constant integer: " s)
 
 lang HoleAst = IntAst + ANF + KeywordMaker
   syn Hole =
@@ -242,15 +242,15 @@ lang HoleAst = IntAst + ANF + KeywordMaker
       let bindings = mapFromSeq cmpString
         (map (lam t : (SID, Expr). (sidToString t.0, t.1))
            (mapBindings bindings)) in
-      let default = _lookup "default" bindings in
-      let depth = _lookup "depth" bindings in
+      let default = _lookup info "default" bindings in
+      let depth = _lookup info "depth" bindings in
       validate
         (TmHole { default = default
-                , depth = _expectConstInt "depth" depth
+                , depth = _expectConstInt info "depth" depth
                 , info = info
                 , ty = hty
                 , hole = hole bindings})
-    else error "Expected record type"
+    else infoErrorExit info "Expected record type"
 end
 
 -- A Boolean decision point.
@@ -281,8 +281,8 @@ lang HoleBoolAst = BoolAst + HoleAst
       let validate = lam expr.
         match expr with TmHole {default = default} then
           match default with TmConst {val = CBool _} then expr
-          else error "Default value not a constant Boolean"
-        else error "Not a decision point" in
+          else infoErrorExit info "Default value not a constant Boolean"
+        else infoErrorExit info "Not a decision point" in
 
       lam lst. _mkHole info tybool_ (lam. BoolHole {}) validate (get lst 0))
 
@@ -311,7 +311,7 @@ lang HoleIntRangeAst = IntAst + HoleAst
         Some (int_ (addi i 1))
       else
         error (join ["Value out of range: ", int2string i,
-                    " not in [", int2string min, ", ", int2string max, "]"])
+                     " not in [", int2string min, ", ", int2string max, "]"])
     else dprintLn last; never
 
   sem matchKeywordString (info : Info) =
@@ -323,17 +323,17 @@ lang HoleIntRangeAst = IntAst + HoleAst
                      hole = IntRange {min = min, max = max}}
         then
           if and (leqi min i) (geqi max i) then expr
-          else error "Default value is not within range"
-        else error "Not an integer decision point" in
+          else infoErrorExit info "Default value is not within range"
+        else infoErrorExit info "Not an integer decision point" in
 
       lam lst. _mkHole info tyint_
         (lam m.
-           let min = _expectConstInt "min" (_lookup "min" m) in
-           let max = _expectConstInt "max" (_lookup "max" m) in
+           let min = _expectConstInt info "min" (_lookup info "min" m) in
+           let max = _expectConstInt info "max" (_lookup info "max" m) in
            if leqi min max then
              IntRange {min = min, max = max}
-           else error (join ["Empty domain: ",
-                           int2string min, "..", int2string max]))
+           else infoErrorExit info
+             (join ["Empty domain: ", int2string min, "..", int2string max]))
         validate (get lst 0))
 
   sem pprintHole =
