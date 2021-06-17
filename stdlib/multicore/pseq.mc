@@ -21,7 +21,7 @@ let chunkWork : [a] -> ([a] -> b) -> [b] = lam seq. lam f.
   let chunkSize = HoleIntRange {min = 1, max = 1000000000, depth = 2, default = 1000000} in
   let chunks = split seq chunkSize in
   let tasks = map (lam chunk. threadPoolAsync pool (lam. f chunk)) chunks in
-  map threadPoolWait tasks
+  map (threadPoolWait pool) tasks
 
 let pmap = lam f. lam seq.
   join (chunkWork seq (map f))
