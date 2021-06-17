@@ -34,11 +34,15 @@ let threadPoolAsync : ThreadPool -> (Unit -> a) -> Async a = lam pool. lam task.
   channelSend pool.queue (Task {task = task, result = r});
   r
 
-recursive let threadPoolWait : Async a -> a = lam r.
+recursive let threadPoolWait : ThreadPool -> Async a -> a = lam pool. lam r.
   match atomicGet r with Some v then v
-  -- OPT(Linnea, 2021-06-17): Do something useful here
+  else match channelRecvOpt pool.queue with Some (Task {task = f, result = r})
+  then
+    -- Do some work while we're waiting
+    atomicSet r (Some (f ()));
+    threadPoolWait pool r
   else
-    threadCPURelax (); threadPoolWait r
+    threadCPURelax (); threadPoolWait pool r
 end
 
 -- Global thread pool
@@ -61,11 +65,11 @@ utest
   let r4 = threadPoolAsync pool (lam. addi 0 4) in
   let r5 = threadPoolAsync pool (lam. addi 0 5) in
   let r =
-  [ threadPoolWait r1
-  , threadPoolWait r2
-  , threadPoolWait r3
-  , threadPoolWait r4
-  , threadPoolWait r5
+  [ threadPoolWait pool r1
+  , threadPoolWait pool r2
+  , threadPoolWait pool r3
+  , threadPoolWait pool r4
+  , threadPoolWait pool r5
   ] in
   threadPoolTearDown pool; r
 with [1,2,3,4,5] in
