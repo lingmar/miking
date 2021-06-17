@@ -31,28 +31,6 @@ recursive let channelSend : Channel a -> a -> Unit = lam chan. lam msg.
   else threadCPURelax (); channelSend chan msg
 end
 
-recursive let channelSendMany : Channel a -> [a] -> Unit = lam chan. lam msgs.
-  let old = atomicGet chan.contents in
-  let new = concat old msgs in
-  if atomicCAS chan.contents old new then
-    recursive let wakeUpRecv = lam.
-      let waiting = atomicGet chan.receivers in
-      if null waiting then ()
-      else
-        match splitAt waiting (length msgs) with (toWake, keepWaiting) then
-          if atomicCAS chan.receivers waiting keepWaiting then
-            -- Wake up at most the number of receivers that there are messages
-            map threadNotify toWake;
-            ()
-          else threadCPURelax (); wakeUpRecv ()
-        else never
-     in wakeUpRecv ()
-  else
-    -- Keep recursing until the message has been sent
-    threadCPURelax ();
-    channelSendMany chan msgs
-end
-
 recursive let channelRecv : Channel a -> a = lam chan.
   let contents = atomicGet chan.contents in
   match contents with [] then
@@ -81,8 +59,11 @@ recursive let channelRecv : Channel a -> a = lam chan.
 end
 
 let channelRecvOpt : Channel a -> Option a = lam chan.
-  match atomicGet chan.contents with [] then None ()
-  else Some (channelRecv chan)
+  let contents = atomicGet chan.contents in
+  match contents with [] then None ()
+  else if atomicCAS chan.contents contents (tail contents) then
+    Some (head contents)
+  else None ()
 
 mexpr
 
@@ -96,11 +77,6 @@ utest channelRecv c with 2 in
 utest channelRecvOpt c with None () using optionEq eqi in
 channelSend c 2;
 utest channelRecvOpt c with Some 2 using optionEq eqi in
-
-utest channelSendMany c [1,2,3] with () in
-utest channelRecv c with 1 in
-utest channelRecv c with 2 in
-utest channelRecv c with 3 in
 
 let debug = false in
 let debugPrintLn = if debug then printLn else (lam x. x) in

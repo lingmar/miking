@@ -27,8 +27,7 @@ let threadPoolCreate : Int -> ThreadPool = lam n.
   {threads = create n (lam. threadSpawn (lam. _wait chan)), queue = chan}
 
 let threadPoolTearDown : ThreadPool -> Unit = lam pool.
-  channelSendMany pool.queue (map (lam. Quit ()) pool.threads);
-  iter threadJoin pool.threads
+  iter (lam. channelSend pool.queue (Quit ())) pool.threads
 
 let threadPoolAsync : ThreadPool -> (Unit -> a) -> Async a = lam pool. lam task.
   let r = atomicMake (None ()) in
@@ -37,7 +36,9 @@ let threadPoolAsync : ThreadPool -> (Unit -> a) -> Async a = lam pool. lam task.
 
 recursive let threadPoolWait : Async a -> a = lam r.
   match atomicGet r with Some v then v
-  else threadCPURelax (); threadPoolWait r
+  -- OPT(Linnea, 2021-06-17): Do something useful here
+  else
+    threadCPURelax (); threadPoolWait r
 end
 
 -- Global thread pool
