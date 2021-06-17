@@ -5,39 +5,83 @@ include "option.mc"
 include "string.mc"
 include "common.mc"
 
--- Implements a FIFO queue with multiple senders and multiple receivers.
+-- Implements a FIFO queue with a single sender and multiple receiver threads.
 -- The channel has an infinite buffer, so a call to channelSend never blocks.
 
-type Channel a = Aref [a]
+type Channel a = {contents : Aref [a], receivers : Aref [Int]}
 
 let channelEmpty : Unit -> Channel a = lam.
-  atomicMake []
+  {contents = atomicMake [], receivers = atomicMake []}
 
+-- Wake up receivers
 recursive let channelSend : Channel a -> a -> Unit = lam chan. lam msg.
-  let old = atomicGet chan in
+  let old = atomicGet chan.contents in
   let new = snoc old msg in
-  if atomicCAS chan old new then ()
+  if atomicCAS chan.contents old new then
+    recursive let wakeUpRecv = lam.
+      let waiting = atomicGet chan.receivers in
+      if null waiting then ()
+      else if atomicCAS chan.receivers waiting (tail waiting) then
+        -- Wake up one receiver
+        threadNotify (head waiting)
+      else
+        threadCPURelax ();
+        wakeUpRecv ()
+    in wakeUpRecv ()
   else threadCPURelax (); channelSend chan msg
 end
 
 recursive let channelSendMany : Channel a -> [a] -> Unit = lam chan. lam msgs.
-  let old = atomicGet chan in
+  let old = atomicGet chan.contents in
   let new = concat old msgs in
-  if atomicCAS chan old new then ()
-  else threadCPURelax (); channelSend chan msgs
+  if atomicCAS chan.contents old new then
+    recursive let wakeUpRecv = lam.
+      let waiting = atomicGet chan.receivers in
+      if null waiting then ()
+      else
+        match splitAt waiting (length msgs) with (toWake, keepWaiting) then
+          if atomicCAS chan.receivers waiting keepWaiting then
+            -- Wake up at most the number of receivers that there are messages
+            map threadNotify toWake;
+            ()
+          else threadCPURelax (); wakeUpRecv ()
+        else never
+     in wakeUpRecv ()
+  else
+    -- Keep recursing until the message has been sent
+    threadCPURelax ();
+    channelSendMany chan msgs
 end
 
 recursive let channelRecv : Channel a -> a = lam chan.
-  let contents = atomicGet chan in
-  match contents with [] then threadCPURelax (); channelRecv chan
+  let contents = atomicGet chan.contents in
+  match contents with [] then
+    threadCriticalSection (lam.
+      recursive let addToReceivers = lam.
+        let receivers = atomicGet chan.receivers in
+        if atomicCAS chan.receivers receivers (snoc receivers (threadSelf ()))
+        then ()
+        else
+          threadCPURelax ();
+          addToReceivers ()
+      in
+      addToReceivers ();
+      -- Wait here until there are tasks available
+      threadWait ());
+    channelRecv chan
   else match contents with [msg] ++ new then
-    if atomicCAS chan contents new then msg
-    else threadCPURelax (); channelRecv chan
+    if atomicCAS chan.contents contents new then
+      -- Got the message
+      msg
+    else
+      -- Someone else got there first, try again
+      threadCPURelax ();
+      channelRecv chan
   else never
 end
 
 let channelRecvOpt : Channel a -> Option a = lam chan.
-  match atomicGet chan with [] then None ()
+  match atomicGet chan.contents with [] then None ()
   else Some (channelRecv chan)
 
 mexpr
