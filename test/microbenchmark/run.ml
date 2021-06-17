@@ -37,7 +37,7 @@ let generate_dune name =
     \          (ocamlc_flags (-without-runtime))))\n\n\
     \      (executable\n\
     \         (name %s)\n\
-    \         (libraries str batteries)\n\
+    \         (libraries batteries str linenoise)\n\
     \         (modes byte exe))" name ;
   close_out oc
 
@@ -68,6 +68,6 @@ let main =
       measure excludes 5 "OCaml native:      "
         ("dune build --root ." ^ " " ^ name ^ ".exe")
         ("./_build/default/" ^ name ^ ".exe" ^ " " ^ iterations)
-        "rm -rf _build && rm dune*" )
+        "rm -rf _build" )
     else () )
   else printf "ERROR: Cannot find file %s.mc\n" name
