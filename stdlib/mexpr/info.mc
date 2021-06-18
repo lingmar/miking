@@ -55,7 +55,7 @@ let info2str : Info -> String = lam fi.
     "-", int2string r.row2, ":", int2string r.col2, " "]
   else never
 
--- Generate an info error stirng
+-- Generate an info error string
 let infoErrorString : Info -> String -> String = lam fi. lam str.
     join [info2str fi, "ERROR: ", str]
 
