@@ -25,14 +25,17 @@ let _eqn = lam n1. lam n2.
 
 type NameInfo = (Name, Info)
 
-let nameInfoCmp = lam v1. lam v2.
+let nameInfoCmp = lam v1 : NameInfo. lam v2 : NameInfo.
   nameCmp v1.0 v2.0
 
-let nameInfoEq = lam l1. lam l2.
+let nameInfoEq = lam l1 : NameInfo. lam l2 : NameInfo.
   _eqn l1.0 l2.0
 
-let nameInfoGetStr = lam ni.
+let nameInfoGetStr = lam ni : NameInfo.
   nameGetStr ni.0
+
+let nameInfoGetName = lam ni : NameInfo.
+  ni.0
 
 let _cmpPaths = seqCmp nameInfoCmp
 
@@ -58,7 +61,7 @@ let callGraphNames = lam cg.
   map (lam t : NameInfo. t.0) (digraphVertices cg)
 
 let _callGraphNameSeq = lam seq.
-  map (lam t : DigraphEdge NameInfo.
+  map (lam t : (NameInfo, NameInfo, NameInfo).
     ((t.0).0, (t.1).0, (t.2).0)) seq
 
 let callGraphEdgeNames = lam cg.
@@ -80,7 +83,12 @@ let _handleApps = use AppAst in use VarAst in
       match app with TmApp {lhs = TmVar v, rhs = rhs} then
         let resLhs =
           if digraphHasVertex (v.ident, v.info) g then
-            [(prev, (v.ident, v.info), id)]
+            let correctInfo : NameInfo =
+              match
+                find (lam n : NameInfo. nameEq v.ident n.0) (digraphVertices g)
+              with Some v then v else error "impossible"
+            in
+            [(prev, (v.ident, correctInfo.1), id)]
           else []
         in concat resLhs (f g prev rhs)
       else match app with TmApp {lhs = TmApp a, rhs = rhs} then
@@ -784,11 +792,13 @@ lang FlattenHoles = Ast2CallGraph + HoleAst + IntAst
   -- Function call: forward call for public function
   | TmLet ({ body = TmApp a } & t) ->
     match _appGetCallee (TmApp a) with Some callee then
-      match mapLookup callee.0 pub2priv
-      with Some local then
-        TmLet {{t with body = _appSetCallee (TmApp a) local}
-                  with inexpr = _replacePublic pub2priv t.inexpr}
-      else TmLet {t with inexpr = _replacePublic pub2priv t.inexpr}
+      match callee with (callee, _) then
+        match mapLookup callee pub2priv
+        with Some local then
+          TmLet {{t with body = _appSetCallee (TmApp a) local}
+                    with inexpr = _replacePublic pub2priv t.inexpr}
+        else TmLet {t with inexpr = _replacePublic pub2priv t.inexpr}
+      else never
     else TmLet {t with inexpr = _replacePublic pub2priv t.inexpr}
 
   -- Function definition: create private equivalent of public functions
@@ -844,7 +854,8 @@ lang FlattenHoles = Ast2CallGraph + HoleAst + IntAst
     match env with { callGraph = callGraph } then
       match callCtxFunLookup cur.0 env with Some _ then
         match _appGetCallee (TmApp a) with Some callee then
-          match callCtxFunLookup callee.0 env with Some iv then
+          match callCtxFunLookup (nameInfoGetName callee) env
+          with Some iv then
             if digraphIsSuccessor callee cur callGraph then
               -- Set the incoming var of callee to current node
               let count = callCtxLbl2Count t.ident env in
@@ -1072,13 +1083,13 @@ let doCallGraphTests = lam r : CallGraphTest.
   let tests = lam ast. lam strVs : [String]. lam strEdgs : [(String, String)].
 
     let toStr = lam ng.
-      let edges = map (lam t : DigraphEdge CallGraphVertex CallGraphLabel.
+      let edges = map (lam t : (NameInfo, NameInfo, NameInfo).
         match t with (from, to, label) then
           (nameGetStr from.0, nameGetStr to.0, label.0)
         else never
       ) (digraphEdges ng) in
 
-      let vertices = map (lam v : CallGraphVertex. nameGetStr v.0) (digraphVertices ng) in
+      let vertices = map nameInfoGetStr (digraphVertices ng) in
 
       digraphAddEdges edges (digraphAddVertices vertices (digraphEmpty cmpString _eqn))
     in
