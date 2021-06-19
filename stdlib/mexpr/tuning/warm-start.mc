@@ -1,5 +1,7 @@
 include "string.mc"
 include "seq.mc"
+include "levenshtein.mc"
+include "math.mc"
 include "mexpr/info.mc"
 include "mexpr/ast-builder.mc"
 include "mexpr/boot-parser.mc"
@@ -140,6 +142,58 @@ let parseHoleInfo : String -> HoleInfo = lam str.
           xs
       else never
   in work holeInfoEmpty entries
+
+type DistParams =
+{ wHoleName : Float
+, wHoleInfo : Float
+, wFunName : Float
+, wFunInfo : Float
+, wInfoFileName : Float
+, wInfoRow : Float
+, wInfoCol : Float
+, pInfoOneNoInfo : Float
+, pInfoTwoNoInfo : Float
+}
+
+let distParams =
+{ wHoleName = 1.0
+, wHoleInfo = 1.0
+, wFunName = 1.0
+, wFunInfo = 1.0
+, wInfoFileName = 1.0
+, wInfoRow = 1.0
+, wInfoCol = 1.0
+, pInfoOneNoInfo = inf
+, pInfoTwoNoInfo = 0.0
+}
+
+let strDist = levenshtein
+
+let infoDist = lam i1 : Info. lam i2 : Info.
+  let p = distParams in
+  match (i1, i2) with (NoInfo _, NoInfo _) then
+    p.pInfoTwoNoInfo
+  else match i1 with NoInfo _ then
+    p.pInfoOneNoInfo
+  else match (i1, i2) with (Info i1, Info i2) then
+    foldl addf 0.0
+    [ mulf p.wInfoFileName (strDist i1.filename i2.filename)
+    , mulf p.wInfoRow (absi (subi i1.row1 i2.row1))
+    , mulf p.wInfoCol (absi (subi i1.col1 i2.col1))
+    ]
+  else never
+
+let globalDist = lam g1 : GlobalInfo. lam g2 : GlobalInfo.
+  let p = distParams in
+  foldl addf 0.0
+  [ mulf p.wHoleName (int2float (strDist g1.0 g2.0))
+  , mulf p.wHoleInfo (infoDist g1.1 g2.1)
+  , mulf p.wFunName  (int2float (strDist g1.2 g2.2))
+  , mulf p.wFunInfo  (infoDist g1.3 g2.3)
+  ]
+
+utest globalDist ("x", NoInfo (), "y", NoInfo ()) ("x", NoInfo (), "y", NoInfo ())
+with 0.0 using eqfApprox 1e-15
 
 mexpr
 let holeInfo = parseHoleInfo (readFile "warm-start.toml") in
