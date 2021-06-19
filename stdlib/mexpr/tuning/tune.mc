@@ -5,6 +5,7 @@ include "map.mc"
 include "decision-points.mc"
 include "tune-options.mc"
 include "common.mc"
+include "warm-start.mc"
 
 -- Performs tuning of a flattened program with decision points.
 
@@ -56,14 +57,15 @@ let _tuneInfo = lam env : CallCtxEnv.
   let entry2str = lam holeInfo : NameInfo. lam path : [NameInfo]. lam i : Int.
     let funInfo : NameInfo = mapFindWithExn holeInfo hole2fun in
     let path = eqPathVerbose path in
+    let info2strEsc = compose escapeString info2str in
     strJoin "\n"
-    [ concat "Index: " (int2string i)
-    , concat "Name: " (nameInfoGetStr holeInfo)
-    , concat "Defined at: " (info2str holeInfo.1)
-    , concat "Function: " (nameInfoGetStr funInfo)
-    , concat "Function defined at: " (info2str funInfo.1)
-    , concat "Call path (functions): " (strJoin " -> " (map nameInfoGetStr path))
-    , concat "Call path (info): " (strJoin " -> " (map (lam x : NameInfo. info2str x.1) path))
+    [ join [indexStr, " = ", (int2string i)]
+    , join [holeNameStr, " = \"", (nameInfoGetStr holeInfo), "\""]
+    , join [holeInfoStr, " = \"", (info2strEsc holeInfo.1), "\""]
+    , join [funNameStr, " = \"", (nameInfoGetStr funInfo), "\""]
+    , join [funInfoStr, " = \"", (info2strEsc funInfo.1), "\""]
+    , join [pathNameStr, " = \"", (strJoin " -> " (map nameInfoGetStr path)), "\""]
+    , join [pathInfoStr, " = \"", (strJoin " -> " (map (lam x : NameInfo. info2strEsc x.1) path)), "\""]
     ]
   in
   let taggedEntries =
@@ -77,7 +79,7 @@ let _tuneInfo = lam env : CallCtxEnv.
       taggedEntries
   in
   let entries = map (lam e : (Int, String). e.1) sortedTagged in
-  strJoin (join ["\n", make _sepLength '-', "\n"]) entries
+  concat "[[hole]]\n" (strJoin (join ["\n", "[[hole]]", "\n"]) entries)
 
 let tuneDumpTable =
   lam file : String.
