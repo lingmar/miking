@@ -7,6 +7,7 @@ include "options.mc"
 include "mexpr/boot-parser.mc"
 include "mexpr/tuning/decision-points.mc"
 include "mexpr/tuning/tune.mc"
+include "mexpr/tuning/warm-start.mc"
 include "ocaml/sys.mc"
 
 lang MCoreTune =
@@ -39,6 +40,10 @@ let tune = lam files. lam options : Options. lam args.
     then
       -- If option --use-tuned is given, then use given tune file as defaults
       let table = if options.useTuned then tableFromFile file else table in
+
+      -- If option --try-use-tuned is given, then try to match old tune file to
+      -- new program
+      tryMatchHoles (tuneFileName file) env;
 
       -- Compile the program
       let binary = ocamlCompileAst options file ast in

@@ -2,6 +2,7 @@ include "string.mc"
 include "seq.mc"
 include "levenshtein.mc"
 include "math.mc"
+include "decision-points.mc"
 include "mexpr/info.mc"
 include "mexpr/ast-builder.mc"
 include "mexpr/boot-parser.mc"
@@ -37,13 +38,8 @@ let pathInfoCmp = cmpLex
 , lam p1 : PathInfo. lam p2 : PathInfo. infoCmp p1.1 p2.1
 ]
 
-type HoleType
-con IntHole : () -> HoleType
-con BoolHole : () -> HoleType
-con UnknownHole : () -> HoleType
-
 type HoleInfo =
-{ globals : Map GlobalInfo HoleType
+{ globals : Map GlobalInfo Type
 , expansions : Map GlobalInfo (Map [PathInfo] Expr)
 }
 
@@ -75,7 +71,12 @@ let parseString = lam str.
 
 utest parseString "\"hello\"" with "hello"
 
-let parseInfo = compose str2info parseString
+let parseInfo = lam str.
+  let info = str2info (parseString str) in
+  match info with NoInfo () then info
+  else match info with Info i then
+    Info {i with filename = parseString i.filename}
+  else never
 
 let parseHoleInfo : String -> HoleInfo = lam str.
   recursive let createMap = lam acc. lam rows.
@@ -119,7 +120,7 @@ let parseHoleInfo : String -> HoleInfo = lam str.
             pathNames pathInfos
         in
 
-        let ty = UnknownHole () in
+        let ty = tyunknown_ in
         let expr = int_ 0 in
 
         let insertExpansion =
@@ -143,6 +144,34 @@ let parseHoleInfo : String -> HoleInfo = lam str.
       else never
   in work holeInfoEmpty entries
 
+let env2holeInfo : CallCtxEnv -> HoleInfo = lam env.
+  match env with { hole2idx = hole2idx, hole2fun = hole2fun } then
+    let hole2idx = deref hole2idx in
+    let hole2fun = deref hole2fun in
+    foldl (lam acc : HoleInfo. lam bind : (NameInfo, Map [NameInfo] Int).
+      let holeName : String = nameInfoGetStr bind.0 in
+      let holeInfo : Info = nameInfoGetInfo bind.0 in
+      let funNameInfo : NameInfo = mapFindWithExn bind.0 hole2fun in
+      let funName : String = nameInfoGetStr funNameInfo in
+      let funInfo : Info = nameInfoGetInfo funNameInfo in
+      let globalInfo : GlobalInfo = (holeName, holeInfo, funName, funInfo) in
+      let expansions =
+        foldl (lam acc. lam paths : [NameInfo].
+          match unzip paths with (funNames, funInfos) then
+            let funNames : [String] = map nameGetStr funNames in
+            let path : [PathInfo] = zipWith (lam n. lam i. (n, i)) funNames funInfos in
+            mapInsert path (int_ 42) acc
+          else never)
+          (mapEmpty (seqCmp pathInfoCmp)) (mapKeys bind.1)
+      in
+      let globals = mapInsert globalInfo (tyunknown_) acc.globals in
+      let expansions = mapInsert globalInfo expansions acc.expansions in
+      {{acc with globals = globals}
+            with expansions = expansions})
+    holeInfoEmpty (mapBindings hole2idx)
+  else never
+
+-- TODO: types
 type DistParams =
 { wHoleName : Float
 , wHoleInfo : Float
@@ -153,6 +182,8 @@ type DistParams =
 , wInfoCol : Float
 , pInfoOneNoInfo : Float
 , pInfoTwoNoInfo : Float
+, pGlobalDistThreshold : Float
+, pContextDistThreshold : Float
 }
 
 let distParams =
@@ -165,9 +196,12 @@ let distParams =
 , wInfoCol = 1.0
 , pInfoOneNoInfo = inf
 , pInfoTwoNoInfo = 0.0
+, pGlobalDistThreshold = 10.0
+, pContextDistThreshold = 10.0
 }
 
-let strDist = levenshtein
+let strDist : String -> String -> Float = lam s1. lam s2.
+  int2float (levenshtein s1 s2)
 
 let infoDist = lam i1 : Info. lam i2 : Info.
   let p = distParams in
@@ -178,22 +212,131 @@ let infoDist = lam i1 : Info. lam i2 : Info.
   else match (i1, i2) with (Info i1, Info i2) then
     foldl addf 0.0
     [ mulf p.wInfoFileName (strDist i1.filename i2.filename)
-    , mulf p.wInfoRow (absi (subi i1.row1 i2.row1))
-    , mulf p.wInfoCol (absi (subi i1.col1 i2.col1))
+    , mulf p.wInfoRow (int2float (absi (subi i1.row1 i2.row1)))
+    , mulf p.wInfoCol (int2float (absi (subi i1.col1 i2.col1)))
     ]
   else never
 
-let globalDist = lam g1 : GlobalInfo. lam g2 : GlobalInfo.
+let globalDist = lam x1 : (GlobalInfo, Type). lam x2 : (GlobalInfo, Type).
+  let g1 = x1.0 in
+  let g2 = x2.0 in
   let p = distParams in
+  print "Comparing "; print g1.0; print " "; printLn g2.0;
+  dprintLn g1;
+  dprintLn g2;
+  let res =
   foldl addf 0.0
-  [ mulf p.wHoleName (int2float (strDist g1.0 g2.0))
+  [ mulf p.wHoleName (strDist g1.0 g2.0)
   , mulf p.wHoleInfo (infoDist g1.1 g2.1)
-  , mulf p.wFunName  (int2float (strDist g1.2 g2.2))
+  , mulf p.wFunName  (strDist g1.2 g2.2)
   , mulf p.wFunInfo  (infoDist g1.3 g2.3)
-  ]
+  ] in
+  print "distance "; dprintLn res;
+  res
 
-utest globalDist ("x", NoInfo (), "y", NoInfo ()) ("x", NoInfo (), "y", NoInfo ())
+utest
+  globalDist
+    (("x", NoInfo (), "y", NoInfo ()), tyunknown_)
+    (("x", NoInfo (), "y", NoInfo ()), tyunknown_)
 with 0.0 using eqfApprox 1e-15
+
+let contextDist = lam. lam. 0.0
+
+let cmpf = lam f1. lam f2.
+  let diff = subf f1 f2 in
+  if ltf 0.0 diff then floorfi diff
+  else if eqfApprox 1e-15 0.0 diff then 0
+  else ceilfi diff
+
+utest min cmpf [0.0, subf 0.0 0.0001, 290.0] with Some (subf 0.0 0.0001)
+using optionEq (eqfApprox 1e-15)
+
+let tryMatchHoles = lam tuneFile. lam env.
+  let params = distParams in
+  let str = readFile tuneFile in
+
+  match strIndex '[' (readFile tuneFile) with Some i then
+    match splitAt str i with (_, suffix) then
+      fprintLn "before";
+
+      -- Compute the old and new hole info structs
+      let oldHoleInfo = parseHoleInfo suffix in
+      let newHoleInfo = env2holeInfo env in
+
+      -- Find the best globally matched old hole for each new hole
+      let bestMatchGlobals : Map GlobalInfo (Float, GlobalInfo) =
+        foldl (lam acc : Map GlobalInfo GlobalInfo. lam new : (GlobalInfo, Type).
+          let dists : [(Float, GlobalInfo)] =
+            map (lam old : (GlobalInfo, Type). (globalDist new old, old.0))
+              (mapBindings oldHoleInfo.globals)
+          in
+          let bestMatch : Option (Float, GlobalInfo) =
+            min (lam t1 : (Float, GlobalInfo). lam t2 : (Float, GlobalInfo).
+              cmpf t1.0 t2.0) dists
+          in
+          match bestMatch with Some bestMatch then
+            let bestMatch : (Float, GlobalInfo) = bestMatch in
+            let bestDist = bestMatch.0 in
+            if leqf bestDist params.pGlobalDistThreshold then
+              mapInsert new.0 bestMatch acc
+            else acc
+          else acc)
+        (mapEmpty globalCmp)
+        (mapBindings newHoleInfo.globals)
+      in
+
+      printLn "***";
+      dprintLn (mapBindings bestMatchGlobals);
+
+      -- Compute best context expanded matches for the global matches
+      let bestMatchExpanded =
+        foldl (lam acc : Map GlobalInfo (Map [PathInfo] (GlobalInfo, [PathInfo])).
+               lam new : (GlobalInfo, Map [PathInfo] Expr).
+          let matchMap : Map [PathInfo] (GlobalInfo, [PathInfo]) =
+            foldl
+            (lam acc : Map [PathInfo] (GlobalInfo, [PathInfo]).
+             lam newPath : [PathInfo].
+               let dists : [(Float, (GlobalInfo, [PathInfo]))] =
+                 let bestGlobal = mapLookup new.0 bestMatchGlobals in
+                 match bestGlobal with Some (globalDist, globalInfo) then
+                   let oldPaths =
+                     mapKeys (mapFindWithExn globalInfo oldHoleInfo.expansions)
+                   in
+                   map (lam oldPath : [PathInfo].
+                          (contextDist newPath oldPath, globalInfo))
+                       oldPaths
+                 else match bestGlobal with None () then []
+                 else never
+               in
+               let bestMatch : Option (Float, (Globalinfo, [PathInfo])) =
+                 min (lam t1 : (Float, (GlobalInfo, [PathInfo])).
+                      lam t2 : (Float, (GlobalInfo, [PathInfo])).
+                   cmpf t1.0 t2.0
+                 ) dists in
+               match bestMatch with Some bestMatch then
+                 let bestMatch : (Float, (GlobalInfo, [PathInfo])) = bestMatch in
+                 let bestDist = bestMatch.0 in
+                 if leqf bestDist params.pContextDistThreshold then
+                   mapInsert newPath bestMatch acc
+                 else acc
+               else acc)
+            (mapEmpty (seqCmp pathInfoCmp))
+            (mapKeys new.1)
+          in mapInsert new.0 matchMap acc)
+          (mapEmpty globalCmp)
+          (mapBindings newHoleInfo.expansions)
+      in
+
+      printLn "*** Context expanded ***";
+      dprintLn (mapBindings bestMatchExpanded);
+      mapMapWithKey (lam k. lam v.
+        print "global: "; dprintLn k;
+        dprintLn (mapBindings v))
+        bestMatchExpanded;
+
+      fprintLn "after"
+    else error "impossible"
+  else error "Cannot read info from tune file"
 
 mexpr
 let holeInfo = parseHoleInfo (readFile "warm-start.toml") in
@@ -202,17 +345,17 @@ utest map (lam t : GlobalInfo. t.0) (mapKeys holeInfo.globals) with ["h1", "h1",
 
 utest map (lam t : GlobalInfo. t.1) (mapKeys holeInfo.globals) with
 [ Info
-  { filename = "\"test/examples/tuning/tune-context.mc\""
+  { filename = "test/examples/tuning/tune-context.mc"
   , row1 = 22 , row2 = 22
   , col1 = 2 , col2 = 50
   },
   Info
-  { filename = "\"test/examples/tuning/tune-context.mc\""
+  { filename = "test/examples/tuning/tune-context.mc"
   , row1 = 5, row2 = 5
   , col1 = 2, col2 = 50
   },
   Info
-  { filename = "\"test/examples/tuning/tune-context.mc\""
+  { filename = "test/examples/tuning/tune-context.mc"
   , row1 = 6, row2 = 6
   , col1 = 2, col2 = 50
   }
@@ -223,17 +366,17 @@ utest map (lam t : GlobalInfo. t.2) (mapKeys holeInfo.globals) with ["bar", "foo
 
 utest map (lam t : GlobalInfo. t.3) (mapKeys holeInfo.globals) with
 [ Info
-  { filename = "\"test/examples/tuning/tune-context.mc\""
+  { filename = "test/examples/tuning/tune-context.mc"
   , row1 = 21 , row2 = 21
   , col1 = 0, col2 = 9
   },
   Info
-  { filename = "\"test/examples/tuning/tune-context.mc\""
+  { filename = "test/examples/tuning/tune-context.mc"
   , row1 = 4, row2 = 4
   , col1 = 0, col2 = 9
   },
   Info
-  { filename = "\"test/examples/tuning/tune-context.mc\""
+  { filename = "test/examples/tuning/tune-context.mc"
   , row1 = 4, row2 = 4
   , col1 = 0, col2 = 9
   }

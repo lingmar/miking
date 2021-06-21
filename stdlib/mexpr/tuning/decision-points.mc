@@ -37,6 +37,9 @@ let nameInfoGetStr = lam ni : NameInfo.
 let nameInfoGetName = lam ni : NameInfo.
   ni.0
 
+let nameInfoGetInfo = lam ni : NameInfo.
+  ni.1
+
 let _cmpPaths = seqCmp nameInfoCmp
 
 let _nameMapInit : [a] -> (a -> Name) -> (a -> v) -> Map Name v =
@@ -405,7 +408,7 @@ type CallCtxEnv = {
   -- expression may be repeated many times.
   idx2hole: Ref ([Expr]),
 
-  -- Maps a hole to the function in which it is defined (for debugging purposes)
+  -- Maps a hole to the function in which it is defined
   hole2fun: Ref (Map NameInfo NameInfo)
 }
 
