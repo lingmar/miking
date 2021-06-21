@@ -34,7 +34,10 @@ Options:
   --exit-before           Exit before evaluation or compilation
   --test                  Generate utest code
   --disable-optimizations Disables optimizations to decrease compilation time
-  --use-tuned             Use values from tuning during compilation
+  --use-tuned             Use values from tuning during compilation or tuning
+  --try-use-tuned         Try to match holes from previous tuning during
+                          compilation or tuning
+  --default-tune-file     Use default tune file (<filename>.tune)
   -- <args>               If the run or eval commands are used, then the texts
                           following -- are arguments to the executed program
 "

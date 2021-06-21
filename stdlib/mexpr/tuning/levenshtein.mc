@@ -49,10 +49,10 @@ let levenshteinCost =
     let res =
     get (get (deref mat) (length s1)) (length s2)
     in
-    printLn ">>>>> levenshtein";
-    dprintLn s1;
-    dprintLn s2;
-    print "res = "; dprintLn res;
+    -- printLn ">>>>> levenshtein";
+    -- dprintLn s1;
+    -- dprintLn s2;
+    -- print "res = "; dprintLn res;
     res
 
 -- Standard Levenshtein distance
