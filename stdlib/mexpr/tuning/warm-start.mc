@@ -8,6 +8,15 @@ include "mexpr/ast-builder.mc"
 include "mexpr/boot-parser.mc"
 include "mexpr/type-annot.mc"
 
+let indexStr = "index"
+let valueStr = "value"
+let holeNameStr = "hole_name"
+let holeInfoStr = "hole_info"
+let funNameStr = "function_name"
+let funInfoStr = "function_info"
+let pathNameStr = "call_path_functions"
+let pathInfoStr = "call_path_infos"
+
 recursive let cmpLex : [a -> a -> Int] -> a -> a -> Int =
   lam cmp. lam a. lam b.
     match cmp with [] then 0
@@ -31,6 +40,16 @@ let globalCmp = cmpLex
 , lam g1 : GlobalInfo. lam g2 : GlobalInfo. infoCmp g1.3 g2.3
 ]
 
+let info2strEsc = compose escapeString info2str
+
+let globalInfo2str = lam g : GlobalInfo.
+  join
+  [ holeNameStr, " = \"", g.0, "\"\n"
+  , holeInfoStr, " = \"", info2strEsc g.1, "\"\n"
+  , funNameStr, " = \"", g.2, "\"\n"
+  , funInfoStr, " = \"", info2strEsc g.3, "\"\n"
+  ]
+
 type PathInfo = (String, Info)
 
 let pathInfoCmp = cmpLex
@@ -38,6 +57,14 @@ let pathInfoCmp = cmpLex
    cmpString p1.0 p2.0
 , lam p1 : PathInfo. lam p2 : PathInfo. infoCmp p1.1 p2.1
 ]
+
+let pathInfo2str = lam p : PathInfo.
+  match unzip p with (funNames, funInfos) then
+    join
+    [ pathNameStr, " = \"", (strJoin " -> " funNames), "\"\n"
+    , pathInfoStr, " = \"", (strJoin " -> " (map info2strEsc funInfos)), "\"\n"
+    ]
+  else never
 
 type HoleInfo =
 { globals : Map GlobalInfo Type
@@ -48,15 +75,6 @@ let holeInfoEmpty =
 { globals = mapEmpty globalCmp
 , expansions = mapEmpty globalCmp
 }
-
-let indexStr = "index"
-let valueStr = "value"
-let holeNameStr = "hole_name"
-let holeInfoStr = "hole_info"
-let funNameStr = "function_name"
-let funInfoStr = "function_info"
-let pathNameStr = "call_path_functions"
-let pathInfoStr = "call_path_infos"
 
 let _startsWith = lam prefix. lam str.
   isPrefix eqc prefix str
@@ -277,6 +295,27 @@ let _parseInt : Expr -> Int = use IntAst in
     match t with TmConst {val = CInt {val = i}} then i
     else dprintLn t; error "impossible"
 
+let matchExplanationString
+  : Int -> Expr -> GlobalInfo -> [PathInfo] -> Option (Float, (GlobalInfo, [PathInfo]))
+    -> String
+  = lam i. lam expr. lam ghole. lam path. lam bestMatch.
+    join
+    [ "[[hole]]\n"
+    , indexStr, " = ", int2string i, "\n"
+    , valueStr, " = ", use MExprPrettyPrint in expr2str expr, "\n"
+    , globalInfo2str ghole
+    , pathInfo2str path
+    , "[match]\n"
+    , match bestMatch with Some (dist, (matchGlobal, matchPath)) then
+        join
+        [ globalInfo2str matchGlobal
+        , pathInfo2str matchPath
+        , "distance_apart = ", float2string dist
+        ]
+      else ""
+    , "\n"
+    ]
+
 let tryMatchHoles = lam tuneFile : String. lam env : CallCtxEnv.
   let params = distParams in
   let str = readFile tuneFile in
@@ -365,7 +404,7 @@ let tryMatchHoles = lam tuneFile : String. lam env : CallCtxEnv.
       -- Compute a lookup table from the match
       let tableMap =
         let idx2hole = deref env.idx2hole in
-        foldl (lam acc : Map Int Expr.
+        foldl (lam acc : Map Int (Expr, String).
                lam bind : (GlobalInfo, Map [PathInfo] Expr).
           let newGlobal = bind.0 in
           let contextMap
@@ -373,23 +412,28 @@ let tryMatchHoles = lam tuneFile : String. lam env : CallCtxEnv.
             mapLookup newGlobal bestMatchExpanded
           in
 
-          foldl (lam acc : Map Int Expr. lam bind : ([PathInfo], Expr).
+          foldl (lam acc : Map Int (Expr, String).
+                 lam bind : ([PathInfo], Expr).
             let path = bind.0 in
             let i = _parseInt bind.1 in
-            dprintLn i;
+
             let defaultVal = lam.
               use HoleAst in
-              default (get idx2hole i)
+              let v = default (get idx2hole i) in
+              let s = matchExplanationString i v newGlobal path (None ()) in
+              (v, s)
             in
             let val =
               match contextMap with Some contextMap then
                 match mapLookup path contextMap
                 with Some (dist, (matchGlobal, matchContext)) then
-                  fdprintLn (mapLookup path contextMap);
-                  let m = mapFindWithExn matchGlobal oldHoleInfo.expansions in
-                  fprintLn "*** here ***";
-                  mapFindWithExn matchContext
-                    (mapFindWithExn matchGlobal oldHoleInfo.expansions)
+                  let v =
+                    mapFindWithExn matchContext
+                      (mapFindWithExn matchGlobal oldHoleInfo.expansions)
+                  in
+                  let s = matchExplanationString i v newGlobal path
+                          (Some (dist, (matchGlobal, matchContext)))
+                  in (v, s)
                 else defaultVal () -- No global match
               else defaultVal () -- No context match
             in mapInsert i val acc
@@ -401,11 +445,14 @@ let tryMatchHoles = lam tuneFile : String. lam env : CallCtxEnv.
         (mapBindings newHoleInfo.expansions)
 
       in
-      let table = mapValues tableMap in
-      dprintLn (use MExprPrettyPrint in map expr2str table);
+      let tableAndStrings = mapValues tableMap in
+      match unzip tableAndStrings with (table, strings) then
+        dprintLn (use MExprPrettyPrint in map expr2str table);
+        map printLn strings;
 
-      fprintLn "after";
-      table
+        fprintLn "after";
+        table
+      else never
     else error "impossible"
   else error "Cannot read info from tune file"
 
