@@ -52,17 +52,27 @@ let globalInfo2str = lam g : GlobalInfo.
 
 type PathInfo = (String, Info)
 
+-- Comparison function suitable for using in Maps
 let pathInfoCmp = cmpLex
 [ lam p1 : PathInfo. lam p2 : PathInfo.
    cmpString p1.0 p2.0
 , lam p1 : PathInfo. lam p2 : PathInfo. infoCmp p1.1 p2.1
 ]
 
+let pathInfoEq = lam p1 : PathInfo. lam p2 : PathInfo.
+  eqi 0 (pathInfoCmp p1 p2)
+
+let _quote = lam str.
+  join ["\"", str, "\""]
+
+let listOfStrings = lam strs.
+  join ["[", strJoin ", " (map _quote strs), "]"]
+
 let pathInfo2str = lam p : PathInfo.
   match unzip p with (funNames, funInfos) then
     join
-    [ pathNameStr, " = \"", (strJoin " -> " funNames), "\"\n"
-    , pathInfoStr, " = \"", (strJoin " -> " (map info2strEsc funInfos)), "\"\n"
+    [ pathNameStr, " = ", listOfStrings funNames, "\n"
+    , pathInfoStr, " = ", listOfStrings (map info2strEsc funInfos), "\n"
     ]
   else never
 
@@ -91,12 +101,31 @@ let parseString = lam str.
 
 utest parseString "\"hello\"" with "hello"
 
-let parseInfo = lam str.
-  let info = str2info (parseString str) in
+let parseSeqOfStrings = lam strs.
+  use BootParser in
+  use SeqAst in
+  use CharAst in
+  match parseMExprString [] strs with TmSeq {tms = tms} then
+    map (lam x. match x with TmSeq {tms = tms} then
+      map (lam x. match x with TmConst {val = CChar {val = c}}
+           then c
+           else error (concat "Not a sequence of strings ", strs))
+        tms
+      else error (concat "Not a sequence: ", strs)
+    ) tms
+  else error (concat "Not a sequence: ", strs)
+
+utest parseSeqOfStrings "[\"hello\", \"world\"]" with ["hello", "world"]
+
+let parseInfoFilename = lam info.
   match info with NoInfo () then info
   else match info with Info i then
     Info {i with filename = parseString i.filename}
   else never
+
+let parseInfo = lam str.
+  let info = str2info (parseString str) in
+  parseInfoFilename info
 
 let parseHoleInfo : String -> HoleInfo = lam str.
   recursive let createMap = lam acc. lam rows.
@@ -135,14 +164,16 @@ let parseHoleInfo : String -> HoleInfo = lam str.
         in
 
         let pathNames : [String] =
-          let str = parseString (mapFindWithExn pathNameStr keyVals) in
-          match str with "" then []
-          else map strTrim (strSplit "->" str)
+          use BootParser in
+          let names = parseSeqOfStrings (mapFindWithExn pathNameStr keyVals) in
+          match names with [] then []
+          else map strTrim names
         in
         let pathInfos : [Info] =
-          let str = parseString (mapFindWithExn pathInfoStr keyVals) in
-          match str with "" then []
-          else map str2info (strSplit "->" str)
+          use BootParser in
+          let infos = parseSeqOfStrings (mapFindWithExn pathInfoStr keyVals) in
+          match infos with [] then []
+          else map parseInfoFilename (map str2info infos)
         in
         let pathInfos : [PathInfo] =
           zipWith (lam s : String. lam i : Info. (s, i))
@@ -170,8 +201,25 @@ let parseHoleInfo : String -> HoleInfo = lam str.
       else never
   in work holeInfoEmpty entries
 
+let eqPathVerbose
+  : [NameInfo] -> CallGraph -> [NameInfo]
+  = lam path. lam g.
+    let edgePath =
+      filter (lam e : (NameInfo, NameInfo, NameInfo).
+        any (nameInfoEq e.2) path) (digraphEdges g)
+    in
+    match edgePath with [] then []
+    else
+      let lastEdge : (NameInfo, NameInfo, NameInfo) = last edgePath in
+      let destination = lastEdge.1 in
+      snoc (map (lam e : (NameInfo, NameInfo, NameInfo). e.0) edgePath)
+      destination
+
 let env2holeInfo : CallCtxEnv -> HoleInfo = lam env.
-  match env with { hole2idx = hole2idx, hole2fun = hole2fun, hole2ty = hole2ty } then
+  match env
+  with { hole2idx = hole2idx, hole2fun = hole2fun,
+         hole2ty = hole2ty, callGraph = callGraph }
+  then
     let hole2idx = deref hole2idx in
     let hole2fun = deref hole2fun in
     let hole2ty = deref hole2ty in
@@ -183,13 +231,14 @@ let env2holeInfo : CallCtxEnv -> HoleInfo = lam env.
       let funInfo : Info = nameInfoGetInfo funNameInfo in
       let globalInfo : GlobalInfo = (holeName, holeInfo, funName, funInfo) in
       let expansions =
-        foldl (lam acc. lam paths : [NameInfo].
-          match unzip paths with (funNames, funInfos) then
+        foldl (lam acc. lam path : [NameInfo].
+          let pathVerbose = eqPathVerbose path callGraph in
+          match unzip pathVerbose with (funNames, funInfos) then
             let funNames : [String] = map nameGetStr funNames in
-            let path : [PathInfo] = zipWith (lam n. lam i. (n, i)) funNames funInfos in
+            let newPath : [PathInfo] = zipWith (lam n. lam i. (n, i)) funNames funInfos in
             -- Store the index of the hole to build flat lookup table later
-            let i = mapFindWithExn paths bind.1 in
-            mapInsert path (int_ i) acc
+            let i = mapFindWithExn path bind.1 in
+            mapInsert newPath (int_ i) acc
           else never)
           (mapEmpty (seqCmp pathInfoCmp)) (mapKeys bind.1)
       in
@@ -200,7 +249,6 @@ let env2holeInfo : CallCtxEnv -> HoleInfo = lam env.
     holeInfoEmpty (mapBindings hole2idx)
   else never
 
--- TODO: types
 type DistParams =
 { wHoleName : Float
 , wHoleInfo : Float
@@ -209,6 +257,10 @@ type DistParams =
 , wInfoFileName : Float
 , wInfoRow : Float
 , wInfoCol : Float
+, wPathName : Int
+, wPathInfo : Int
+, wPathDelCost : Int
+, wPathInsCost : Int
 , pInfoOneNoInfo : Float
 , pInfoTwoNoInfo : Float
 , pGlobalDistThreshold : Float
@@ -223,20 +275,26 @@ let distParams =
 , wInfoFileName = 1.0
 , wInfoRow = 1.0
 , wInfoCol = 1.0
+, wPathName = 1
+, wPathInfo = 1
+, wPathDelCost = 1
+, wPathInsCost = 1
 , pInfoOneNoInfo = inf
 , pInfoTwoNoInfo = 0.0
 , pGlobalDistThreshold = 10.0
-, pContextDistThreshold = 10.0
+, pContextDistThreshold = 100.0
 }
 
 let strDist : String -> String -> Float = lam s1. lam s2.
-  int2float (levenshtein s1 s2)
+  int2float (levenshtein eqc s1 s2)
 
 let infoDist = lam i1 : Info. lam i2 : Info.
   let p = distParams in
   match (i1, i2) with (NoInfo _, NoInfo _) then
     p.pInfoTwoNoInfo
   else match i1 with NoInfo _ then
+    p.pInfoOneNoInfo
+  else match i2 with NoInfo _ then
     p.pInfoOneNoInfo
   else match (i1, i2) with (Info i1, Info i2) then
     foldl addf 0.0
@@ -245,6 +303,13 @@ let infoDist = lam i1 : Info. lam i2 : Info.
     , mulf p.wInfoCol (int2float (absi (subi i1.col1 i2.col1)))
     ]
   else never
+
+let pathInfoDist = lam p1 : PathInfo. lam p2 : PathInfo.
+  let p = distParams in
+  foldl addi 0
+  [ muli p.wPathName (roundfi (strDist p1.0 p2.0))
+  , muli p.wPathInfo (roundfi (infoDist p1.1 p2.1))
+  ]
 
 let globalDist = lam x1 : (GlobalInfo, Type). lam x2 : (GlobalInfo, Type).
   use MExprEq in
@@ -279,7 +344,10 @@ utest
     (("x", NoInfo (), "y", NoInfo ()), tybool_)
 with inf using eqf
 
-let contextDist = lam. lam. 0.0
+let contextDist = lam p1 : [PathInfo]. lam p2 : [PathInfo].
+  let p = distParams in
+  int2float
+    (levenshteinCost pathInfoDist p.wPathDelCost p.wPathInsCost pathInfoEq p1 p2)
 
 let cmpf = lam f1. lam f2.
   let diff = subf f1 f2 in
@@ -328,6 +396,10 @@ let tryMatchHoles = lam tuneFile : String. lam env : CallCtxEnv.
       let oldHoleInfo = parseHoleInfo suffix in
       let newHoleInfo = env2holeInfo env in
 
+      printLn " ###### ";
+      dprintLn (mapKeys oldHoleInfo.expansions);
+      printLn " ###### ";
+
       -- Find the best globally matched old hole for each new hole
       let bestMatchGlobals : Map GlobalInfo (Float, GlobalInfo) =
         foldl (lam acc : Map GlobalInfo GlobalInfo. lam new : (GlobalInfo, Type).
@@ -350,8 +422,9 @@ let tryMatchHoles = lam tuneFile : String. lam env : CallCtxEnv.
         (mapBindings newHoleInfo.globals)
       in
 
-      printLn "***";
-      dprintLn (mapBindings bestMatchGlobals);
+      printLn " 2###### ";
+      dprintLn (mapKeys oldHoleInfo.expansions);
+      printLn " ###### ";
 
       -- Compute best context expanded matches for the global matches
       let bestMatchExpanded
@@ -370,6 +443,8 @@ let tryMatchHoles = lam tuneFile : String. lam env : CallCtxEnv.
                      mapKeys (mapFindWithExn globalInfo oldHoleInfo.expansions)
                    in
                    map (lam oldPath : [PathInfo].
+                          printLn "Before contextDist";
+                          dprintLn oldPath;
                           (contextDist newPath oldPath, (globalInfo, oldPath)))
                        oldPaths
                  else match bestGlobal with None () then []
@@ -402,7 +477,7 @@ let tryMatchHoles = lam tuneFile : String. lam env : CallCtxEnv.
         bestMatchExpanded;
 
       -- Compute a lookup table from the match
-      let tableMap =
+      let tableMap : Map Int (Expr, String) =
         let idx2hole = deref env.idx2hole in
         foldl (lam acc : Map Int (Expr, String).
                lam bind : (GlobalInfo, Map [PathInfo] Expr).
