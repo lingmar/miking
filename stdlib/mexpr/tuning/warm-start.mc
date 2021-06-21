@@ -364,25 +364,48 @@ let _parseInt : Expr -> Int = use IntAst in
     else dprintLn t; error "impossible"
 
 let matchExplanationString
-  : Int -> Expr -> GlobalInfo -> [PathInfo] -> Option (Float, (GlobalInfo, [PathInfo]))
+  : Int -> Expr -> GlobalInfo -> Option (Float, GlobalInfo) -> [PathInfo] -> Option (Float, Expr, (GlobalInfo, [PathInfo]))
     -> String
-  = lam i. lam expr. lam ghole. lam path. lam bestMatch.
+  = lam i. lam expr. lam ghole. lam globalMatch. lam path. lam contextMatch.
     join
     [ "[[hole]]\n"
     , indexStr, " = ", int2string i, "\n"
     , valueStr, " = ", use MExprPrettyPrint in expr2str expr, "\n"
     , globalInfo2str ghole
     , pathInfo2str path
-    , "[match]\n"
-    , match bestMatch with Some (dist, (matchGlobal, matchPath)) then
+    , match globalMatch with Some (dist, globalInfo) then
         join
-        [ globalInfo2str matchGlobal
+        [ "[global match]\n"
+        , globalInfo2str globalInfo
+        , "distance_apart = ", float2string dist, "\n"
+        ]
+      else ""
+    , match contextMatch with Some (dist, expr, (matchGlobal, matchPath)) then
+        join
+        [ "[context match]\n"
+        , globalInfo2str matchGlobal
         , pathInfo2str matchPath
+        , valueStr, " = ", use MExprPrettyPrint in expr2str expr, "\n"
         , "distance_apart = ", float2string dist
         ]
       else ""
     , "\n"
     ]
+
+let _adjustRange = lam env : CallCtxEnv. lam i : Int. lam expr : Expr.
+  use HoleAst in
+  match env with { idx2hole = idx2hole } then
+    let idx2hole = deref idx2hole in
+    match get idx2hole i with TmHole { hole = hole } then
+      use HoleIntRangeAst in
+      match hole with IntRange {min = min, max = max} then
+        let v = _parseInt expr in
+        if lti v min then int_ min
+        else if gti v max then int_ max
+        else expr
+      else expr
+    else error "impossible"
+  else never
 
 let tryMatchHoles = lam tuneFile : String. lam env : CallCtxEnv.
   let params = distParams in
@@ -414,9 +437,9 @@ let tryMatchHoles = lam tuneFile : String. lam env : CallCtxEnv.
           match bestMatch with Some bestMatch then
             let bestMatch : (Float, GlobalInfo) = bestMatch in
             let bestDist = bestMatch.0 in
-            if leqf bestDist params.pGlobalDistThreshold then
+            --if leqf bestDist params.pGlobalDistThreshold then
               mapInsert new.0 bestMatch acc
-            else acc
+            --else acc
           else acc)
         (mapEmpty globalCmp)
         (mapBindings newHoleInfo.globals)
@@ -458,9 +481,9 @@ let tryMatchHoles = lam tuneFile : String. lam env : CallCtxEnv.
                match bestMatch with Some bestMatch then
                  let bestMatch : (Float, (GlobalInfo, [PathInfo])) = bestMatch in
                  let bestDist = bestMatch.0 in
-                 if leqf bestDist params.pContextDistThreshold then
+                 --if leqf bestDist params.pContextDistThreshold then
                    mapInsert newPath bestMatch acc
-                 else acc
+                 --else acc
                else acc)
             (mapEmpty (seqCmp pathInfoCmp))
             (mapKeys new.1)
@@ -486,6 +509,9 @@ let tryMatchHoles = lam tuneFile : String. lam env : CallCtxEnv.
             : Option (Map [PathInfo] (Float, (GlobalInfo, [PathInfo]))) =
             mapLookup newGlobal bestMatchExpanded
           in
+          let globalMatch : Option (Float, GlobalInfo) =
+            mapLookup newGlobal bestMatchGlobals
+          in
 
           foldl (lam acc : Map Int (Expr, String).
                  lam bind : ([PathInfo], Expr).
@@ -495,7 +521,7 @@ let tryMatchHoles = lam tuneFile : String. lam env : CallCtxEnv.
             let defaultVal = lam.
               use HoleAst in
               let v = default (get idx2hole i) in
-              let s = matchExplanationString i v newGlobal path (None ()) in
+              let s = matchExplanationString i v newGlobal globalMatch path (None ()) in
               (v, s)
             in
             let val =
@@ -506,9 +532,10 @@ let tryMatchHoles = lam tuneFile : String. lam env : CallCtxEnv.
                     mapFindWithExn matchContext
                       (mapFindWithExn matchGlobal oldHoleInfo.expansions)
                   in
-                  let s = matchExplanationString i v newGlobal path
-                          (Some (dist, (matchGlobal, matchContext)))
-                  in (v, s)
+                  let vAdjust = _adjustRange env i v in
+                  let s = matchExplanationString i v newGlobal globalMatch path
+                          (Some (dist, v, (matchGlobal, matchContext)))
+                  in (vAdjust, s)
                 else defaultVal () -- No global match
               else defaultVal () -- No context match
             in mapInsert i val acc
