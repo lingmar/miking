@@ -218,7 +218,7 @@ let eqPathVerbose
 let _parseInt : Expr -> Int = use IntAst in
   lam t.
     match t with TmConst {val = CInt {val = i}} then i
-    else error "impossible"
+    else dprintLn t; error "impossible"
 
 utest _parseInt (int_ 42) with 42
 
@@ -306,7 +306,7 @@ let distParams =
 , wPathInsCost = 1
 , pInfoOneNoInfo = inf
 , pInfoTwoNoInfo = 0.0
-, pGlobalDistThreshold = 10.0
+, pGlobalDistThreshold = 1000.0
 , pContextDistThreshold = 100.0
 }
 
@@ -345,6 +345,8 @@ let globalDist = lam x1 : (GlobalInfo, Type). lam x2 : (GlobalInfo, Type).
   -- dprintLn g1;
   -- dprintLn g2;
   let res =
+    print "comparing types: "; dprintLn x1.1; dprintLn x2.1;
+    dprintLn (eqType [] x1.1 x2.1);
     if eqType [] x1.1 x2.1 then
       foldl addf 0.0
       [ mulf p.wHoleName (strDist g1.0 g2.0)
@@ -414,6 +416,7 @@ let matchExplanationString
 
 let _adjustRange = lam env : CallCtxEnv. lam i : Int. lam expr : Expr.
   use HoleAst in
+  printLn "_adjustRange";
   match env with { idx2hole = idx2hole } then
     let idx2hole = deref idx2hole in
     match get idx2hole i with TmHole { hole = hole } then
@@ -455,9 +458,9 @@ let tryMatchHoles = lam tuneFile : String. lam env : CallCtxEnv.
           match bestMatch with Some bestMatch then
             let bestMatch : (Float, GlobalInfo) = bestMatch in
             let bestDist = bestMatch.0 in
-            --if leqf bestDist params.pGlobalDistThreshold then
+            if leqf bestDist params.pGlobalDistThreshold then
               mapInsert new.0 bestMatch acc
-            --else acc
+            else acc
           else acc)
         (mapEmpty globalCmp)
         (mapBindings newHoleInfo.globals)
@@ -541,7 +544,7 @@ let tryMatchHoles = lam tuneFile : String. lam env : CallCtxEnv.
                         (mapFindWithExn matchGlobal oldHoleInfo.expansions)
                     in
                     let vAdjust = _adjustRange env i v in
-                    let s = matchExplanationString i v newGlobal globalMatch path
+                    let s = matchExplanationString i vAdjust newGlobal globalMatch path
                             (Some (dist, v, (matchGlobal, matchContext)))
                     in (vAdjust, s)
                   else defaultVal () -- No global match
