@@ -35,7 +35,7 @@ let _tuneTable2str = lam table : LookupTable.
     join [int2string i, ": ", expr2str expr]) table in
   strJoin _delim rows
 
-let _tuneInfo = lam env : CallCtxEnv.
+let _tuneInfo = lam env : CallCtxEnv. lam table : LookupTable.
   let hole2idx = deref env.hole2idx in
   let hole2fun = deref env.hole2fun in
   let callGraph = env.callGraph in
@@ -60,6 +60,10 @@ let _tuneInfo = lam env : CallCtxEnv.
     let info2strEsc = compose escapeString info2str in
     strJoin "\n"
     [ join [indexStr, " = ", (int2string i)]
+    , join [ valueStr, " = ",
+             use MExprPrettyPrint in
+             expr2str (get table i)
+           ]
     , join [holeNameStr, " = \"", (nameInfoGetStr holeInfo), "\""]
     , join [holeInfoStr, " = \"", (info2strEsc holeInfo.1), "\""]
     , join [funNameStr, " = \"", (nameInfoGetStr funInfo), "\""]
@@ -91,7 +95,7 @@ let tuneDumpTable =
     , "\n"
     , make _sepLength '='
     , "\n"
-    , match env with Some env then _tuneInfo env else ""
+    , match env with Some env then _tuneInfo env table else ""
     , "\n"
     ] in
     writeFile destinationFile str

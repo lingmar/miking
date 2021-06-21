@@ -409,7 +409,10 @@ type CallCtxEnv = {
   idx2hole: Ref ([Expr]),
 
   -- Maps a hole to the function in which it is defined
-  hole2fun: Ref (Map NameInfo NameInfo)
+  hole2fun: Ref (Map NameInfo NameInfo),
+
+  -- Maps a hole to its type
+  hole2ty: Ref (Map NameInfo Type)
 }
 
 -- Create a new name from a prefix string and name.
@@ -460,6 +463,7 @@ let callCtxInit : [NameInfo] -> CallGraph -> Expr -> CallCtxEnv =
     , hole2idx  = ref (mapEmpty nameInfoCmp)
     , idx2hole = ref []
     , hole2fun = ref (mapEmpty nameInfoCmp)
+    , hole2ty = ref (mapEmpty nameInfoCmp)
     }
 
 -- Returns the incoming variable of a function name, or None () if the name is
@@ -503,7 +507,10 @@ let callCtxIncVarNames : CallCtxEnv -> [Name] = lam env : CallCtxEnv.
 
 let callCtxAddHole : Expr -> NameInfo -> [[NameInfo]] -> NameInfo -> CallCtxEnv -> CallCtxEnv =
   lam hole. lam name. lam paths. lam funName. lam env : CallCtxEnv.
-    match env with { hole2idx = hole2idx, idx2hole = idx2hole, hole2fun = hole2fun } then
+    match env with
+      { hole2idx = hole2idx, idx2hole = idx2hole, hole2fun = hole2fun,
+        hole2ty = hole2ty }
+    then
     let countInit = length (deref idx2hole) in
     match
       foldl
@@ -518,6 +525,7 @@ let callCtxAddHole : Expr -> NameInfo -> [[NameInfo]] -> NameInfo -> CallCtxEnv 
       modref idx2hole (concat (deref idx2hole) (create n (lam. hole)));
       modref hole2idx (mapInsert name m (deref hole2idx));
       modref hole2fun (mapInsert name funName (deref hole2fun));
+      modref hole2ty (mapInsert name (use HoleAst in ty hole) (deref hole2ty));
       env
     else never
   else never
