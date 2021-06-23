@@ -45,7 +45,6 @@ let tune = lam files. lam options : Options. lam args.
         { ast = ast, table = table, tempFile = tempFile, cleanup = cleanup,
           env = env }
       then
-        printLn (use MExprPrettyPrint in expr2str ast);
         -- If option --use-tuned is given, then use given tune file as defaults
         let table =
           if options.useTuned then

@@ -346,9 +346,6 @@ let globalDist = lam x1 : (GlobalInfo, Type). lam x2 : (GlobalInfo, Type).
   let g1 = x1.0 in
   let g2 = x2.0 in
   let p = distParams in
-  -- print "Comparing "; print g1.0; print " "; printLn g2.0;
-  -- dprintLn g1;
-  -- dprintLn g2;
   let res =
     if eqType [] x1.1 x2.1 then
       foldl addf 0.0
@@ -359,7 +356,6 @@ let globalDist = lam x1 : (GlobalInfo, Type). lam x2 : (GlobalInfo, Type).
       ]
     else inf
   in
-  -- print "distance "; dprintLn res;
   res
 
 utest
@@ -419,7 +415,6 @@ let matchExplanationString
 
 let _adjustRange = lam env : CallCtxEnv. lam i : Int. lam expr : Expr.
   use HoleAst in
-  printLn "_adjustRange";
   match env with { idx2hole = idx2hole } then
     let idx2hole = deref idx2hole in
     match get idx2hole i with TmHole { hole = hole } then
@@ -574,7 +569,7 @@ mexpr
 
 use TestLang in
 
-let debug = true in
+let debug = false in
 
 let debugPrint = if debug then print else lam. () in
 
@@ -638,8 +633,6 @@ then
 
   utest ghole.0 with "h" in
   utest ghole.2 with "foo" in
-
-  dprintLn (mapKeys pathMap);
 
   utest
     match mapKeys pathMap with [[("top", _), ("foo", _)]]

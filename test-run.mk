@@ -49,6 +49,7 @@ run_files += test/mlang/also_includes_lib.mc
 # run_files += stdlib/mexpr/tuning/tune.mc
 # run_files += stdlib/mexpr/tuning/tune-options.mc
 # run_files += stdlib/mexpr/tuning/eq-paths.mc
+# run_files += stdlib/mexpr/tuning/warm-start.mc
 # run_files += stdlib/mexpr/lamlift.mc
 # run_files += stdlib/mexpr/utesttrans.mc
 # run_files += stdlib/mexpr/eval.mc

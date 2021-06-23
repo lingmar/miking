@@ -40,7 +40,6 @@ let _tuneInfo = lam env : CallCtxEnv. lam table : LookupTable.
   let hole2fun = deref env.hole2fun in
   let callGraph = env.callGraph in
 
-  -- TODO: write paths as toml lists instead of using ->
   let entry2str = lam holeInfo : NameInfo. lam path : [NameInfo]. lam i : Int.
     let funInfo : NameInfo = mapFindWithExn holeInfo hole2fun in
     let path = eqPathVerbose path callGraph in

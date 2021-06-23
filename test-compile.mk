@@ -49,6 +49,7 @@ compile_files += stdlib/mexpr/tuning/decision-points.mc
 compile_files += stdlib/mexpr/tuning/tune.mc
 compile_files += stdlib/mexpr/tuning/tune-options.mc
 compile_files += stdlib/mexpr/tuning/eq-paths.mc
+compile_files += stdlib/mexpr/tuning/warm-start.mc
 compile_files += stdlib/mexpr/lamlift.mc
 compile_files += stdlib/mexpr/utesttrans.mc
 compile_files += stdlib/mexpr/eval.mc
