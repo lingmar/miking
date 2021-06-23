@@ -25,14 +25,20 @@ let _eqn = lam n1. lam n2.
 
 type NameInfo = (Name, Info)
 
-let nameInfoCmp = lam v1. lam v2.
+let nameInfoCmp = lam v1 : NameInfo. lam v2 : NameInfo.
   nameCmp v1.0 v2.0
 
-let nameInfoEq = lam l1. lam l2.
+let nameInfoEq = lam l1 : NameInfo. lam l2 : NameInfo.
   _eqn l1.0 l2.0
 
-let nameInfoGetStr = lam ni.
+let nameInfoGetStr = lam ni : NameInfo.
   nameGetStr ni.0
+
+let nameInfoGetName = lam ni : NameInfo.
+  ni.0
+
+let nameInfoGetInfo = lam ni : NameInfo.
+  ni.1
 
 let _cmpPaths = seqCmp nameInfoCmp
 
@@ -58,7 +64,7 @@ let callGraphNames = lam cg.
   map (lam t : NameInfo. t.0) (digraphVertices cg)
 
 let _callGraphNameSeq = lam seq.
-  map (lam t : DigraphEdge NameInfo.
+  map (lam t : (NameInfo, NameInfo, NameInfo).
     ((t.0).0, (t.1).0, (t.2).0)) seq
 
 let callGraphEdgeNames = lam cg.
@@ -80,7 +86,12 @@ let _handleApps = use AppAst in use VarAst in
       match app with TmApp {lhs = TmVar v, rhs = rhs} then
         let resLhs =
           if digraphHasVertex (v.ident, v.info) g then
-            [(prev, (v.ident, v.info), id)]
+            let correctInfo : NameInfo =
+              match
+                find (lam n : NameInfo. nameEq v.ident n.0) (digraphVertices g)
+              with Some v then v else error "impossible"
+            in
+            [(prev, (v.ident, correctInfo.1), id)]
           else []
         in concat resLhs (f g prev rhs)
       else match app with TmApp {lhs = TmApp a, rhs = rhs} then
@@ -156,13 +167,13 @@ let decisionPointsKeywords =
 , "holeIntRange"
 ]
 
-let _lookup = lam s : String. lam m : Map String a.
-  mapLookupOrElse (lam. error (concat s " not found")) s m
+let _lookup = lam info : Info. lam s : String. lam m : Map String a.
+  mapLookupOrElse (lam. infoErrorExit info (concat s " not found")) s m
 
-let _expectConstInt = lam s. lam i.
+let _expectConstInt = lam info : Info. lam s. lam i.
   use IntAst in
   match i with TmConst {val = CInt {val = i}} then i
-  else error (concat "Expected a constant integer: " s)
+  else infoErrorExit info (concat "Expected a constant integer: " s)
 
 lang HoleAst = IntAst + ANF + KeywordMaker
   syn Hole =
@@ -248,15 +259,15 @@ lang HoleAst = IntAst + ANF + KeywordMaker
       let bindings = mapFromSeq cmpString
         (map (lam t : (SID, Expr). (sidToString t.0, t.1))
            (mapBindings bindings)) in
-      let default = _lookup "default" bindings in
-      let depth = _lookup "depth" bindings in
+      let default = _lookup info "default" bindings in
+      let depth = _lookup info "depth" bindings in
       validate
         (TmHole { default = default
-                , depth = _expectConstInt "depth" depth
+                , depth = _expectConstInt info "depth" depth
                 , info = info
                 , ty = hty
                 , hole = hole bindings})
-    else error "Expected record type"
+    else infoErrorExit info "Expected record type"
 end
 
 -- A Boolean decision point.
@@ -290,8 +301,8 @@ lang HoleBoolAst = BoolAst + HoleAst
       let validate = lam expr.
         match expr with TmHole {default = default} then
           match default with TmConst {val = CBool _} then expr
-          else error "Default value not a constant Boolean"
-        else error "Not a decision point" in
+          else infoErrorExit info "Default value not a constant Boolean"
+        else infoErrorExit info "Not a decision point" in
 
       lam lst. _mkHole info tybool_ (lam. BoolHole {}) validate (get lst 0))
 
@@ -325,7 +336,7 @@ lang HoleIntRangeAst = IntAst + HoleAst
           Some (int_ next)
         else
         error (join ["Value out of range: ", int2string i,
-                    " not in [", int2string min, ", ", int2string max, "]"])
+                     " not in [", int2string min, ", ", int2string max, "]"])
     else dprintLn last; never
 
   sem matchKeywordString (info : Info) =
@@ -337,17 +348,17 @@ lang HoleIntRangeAst = IntAst + HoleAst
                      hole = IntRange {min = min, max = max}}
         then
           if and (leqi min i) (geqi max i) then expr
-          else error "Default value is not within range"
-        else error "Not an integer decision point" in
+          else infoErrorExit info "Default value is not within range"
+        else infoErrorExit info "Not an integer decision point" in
 
       lam lst. _mkHole info tyint_
         (lam m.
-           let min = _expectConstInt "min" (_lookup "min" m) in
-           let max = _expectConstInt "max" (_lookup "max" m) in
+           let min = _expectConstInt info "min" (_lookup info "min" m) in
+           let max = _expectConstInt info "max" (_lookup info "max" m) in
            if leqi min max then
              IntRange {min = min, max = max}
-           else error (join ["Empty domain: ",
-                           int2string min, "..", int2string max]))
+           else infoErrorExit info
+             (join ["Empty domain: ", int2string min, "..", int2string max]))
         validate (get lst 0))
 
   sem pprintHole =
@@ -411,8 +422,11 @@ type CallCtxEnv = {
   -- expression may be repeated many times.
   idx2hole: Ref ([Expr]),
 
-  -- Maps a hole to the function in which it is defined (for debugging purposes)
-  hole2fun: Ref (Map NameInfo NameInfo)
+  -- Maps a hole to the function in which it is defined
+  hole2fun: Ref (Map NameInfo NameInfo),
+
+  -- Maps a hole to its type
+  hole2ty: Ref (Map NameInfo Type)
 }
 
 -- Create a new name from a prefix string and name.
@@ -463,6 +477,7 @@ let callCtxInit : [NameInfo] -> CallGraph -> Expr -> CallCtxEnv =
     , hole2idx  = ref (mapEmpty nameInfoCmp)
     , idx2hole = ref []
     , hole2fun = ref (mapEmpty nameInfoCmp)
+    , hole2ty = ref (mapEmpty nameInfoCmp)
     }
 
 -- Returns the incoming variable of a function name, or None () if the name is
@@ -506,7 +521,10 @@ let callCtxIncVarNames : CallCtxEnv -> [Name] = lam env : CallCtxEnv.
 
 let callCtxAddHole : Expr -> NameInfo -> [[NameInfo]] -> NameInfo -> CallCtxEnv -> CallCtxEnv =
   lam hole. lam name. lam paths. lam funName. lam env : CallCtxEnv.
-    match env with { hole2idx = hole2idx, idx2hole = idx2hole, hole2fun = hole2fun } then
+    match env with
+      { hole2idx = hole2idx, idx2hole = idx2hole, hole2fun = hole2fun,
+        hole2ty = hole2ty }
+    then
     let countInit = length (deref idx2hole) in
     match
       foldl
@@ -521,6 +539,7 @@ let callCtxAddHole : Expr -> NameInfo -> [[NameInfo]] -> NameInfo -> CallCtxEnv 
       modref idx2hole (concat (deref idx2hole) (hcreate n (lam. hole)));
       modref hole2idx (mapInsert name m (deref hole2idx));
       modref hole2fun (mapInsert name funName (deref hole2fun));
+      modref hole2ty (mapInsert name (use HoleAst in ty hole) (deref hole2ty));
       env
     else never
   else never
@@ -806,11 +825,13 @@ lang FlattenHoles = Ast2CallGraph + HoleAst + IntAst
   -- Function call: forward call for public function
   | TmLet ({ body = TmApp a } & t) ->
     match _appGetCallee (TmApp a) with Some callee then
-      match mapLookup callee.0 pub2priv
-      with Some local then
-        TmLet {{t with body = _appSetCallee (TmApp a) local}
-                  with inexpr = _replacePublic pub2priv t.inexpr}
-      else TmLet {t with inexpr = _replacePublic pub2priv t.inexpr}
+      match callee with (callee, _) then
+        match mapLookup callee pub2priv
+        with Some local then
+          TmLet {{t with body = _appSetCallee (TmApp a) local}
+                    with inexpr = _replacePublic pub2priv t.inexpr}
+        else TmLet {t with inexpr = _replacePublic pub2priv t.inexpr}
+      else never
     else TmLet {t with inexpr = _replacePublic pub2priv t.inexpr}
 
   -- Function definition: create private equivalent of public functions
@@ -866,7 +887,8 @@ lang FlattenHoles = Ast2CallGraph + HoleAst + IntAst
     match env with { callGraph = callGraph } then
       match callCtxFunLookup cur.0 env with Some _ then
         match _appGetCallee (TmApp a) with Some callee then
-          match callCtxFunLookup callee.0 env with Some iv then
+          match callCtxFunLookup (nameInfoGetName callee) env
+          with Some iv then
             if digraphIsSuccessor callee cur callGraph then
               -- Set the incoming var of callee to current node
               let count = callCtxLbl2Count t.ident env in
@@ -895,11 +917,7 @@ lang FlattenHoles = Ast2CallGraph + HoleAst + IntAst
 
   -- Function definitions: possibly update cur inside body of function
   | TmLet ({ body = TmLam lm } & t) ->
-    let curBody =
-      match callCtxFunLookup t.ident env with Some _
-      then (t.ident, t.info)
-      else cur
-    in
+    let curBody = (t.ident, t.info) in
     TmLet {{t with body = _maintainCallCtx lookup env eqPaths curBody t.body}
               with inexpr = _maintainCallCtx lookup env eqPaths cur t.inexpr}
 
@@ -907,11 +925,7 @@ lang FlattenHoles = Ast2CallGraph + HoleAst + IntAst
     let newBinds =
       map (lam bind : RecLetBinding.
         match bind with { body = TmLam lm } then
-          let curBody =
-            match callCtxFunLookup bind.ident env with Some _
-            then (bind.ident, bind.info)
-            else cur
-          in
+          let curBody = (bind.ident, bind.info) in
           {bind with body =
              _maintainCallCtx lookup env eqPaths curBody bind.body}
         else
@@ -1094,13 +1108,13 @@ let doCallGraphTests = lam r : CallGraphTest.
   let tests = lam ast. lam strVs : [String]. lam strEdgs : [(String, String)].
 
     let toStr = lam ng.
-      let edges = map (lam t : DigraphEdge CallGraphVertex CallGraphLabel.
+      let edges = map (lam t : (NameInfo, NameInfo, NameInfo).
         match t with (from, to, label) then
           (nameGetStr from.0, nameGetStr to.0, label.0)
         else never
       ) (digraphEdges ng) in
 
-      let vertices = map (lam v : CallGraphVertex. nameGetStr v.0) (digraphVertices ng) in
+      let vertices = map nameInfoGetStr (digraphVertices ng) in
 
       digraphAddEdges edges (digraphAddVertices vertices (digraphEmpty cmpString _eqn))
     in

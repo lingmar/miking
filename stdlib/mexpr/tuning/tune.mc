@@ -5,6 +5,7 @@ include "map.mc"
 include "decision-points.mc"
 include "tune-options.mc"
 include "common.mc"
+include "warm-start.mc"
 
 -- Performs tuning of a flattened program with decision points.
 
@@ -34,36 +35,27 @@ let _tuneTable2str = lam table : LookupTable.
     join [int2string i, ": ", expr2str expr]) table in
   strJoin _delim rows
 
-let _tuneInfo = lam env : CallCtxEnv.
+let _tuneInfo = lam env : CallCtxEnv. lam table : LookupTable.
   let hole2idx = deref env.hole2idx in
   let hole2fun = deref env.hole2fun in
   let callGraph = env.callGraph in
-  let edges = digraphEdges callGraph in
-
-  let eqPathVerbose = lam path : [NameInfo].
-    let edgePath =
-      filter (lam e : (NameInfo, NameInfo, NameInfo).
-        any (nameInfoEq e.2) path) edges
-    in
-    match edgePath with [] then []
-    else
-      let lastEdge : (NameInfo, NameInfo, NameInfo) = last edgePath in
-      let destination = lastEdge.1 in
-      snoc (map (lam e : (NameInfo, NameInfo, NameInfo). e.0) edgePath)
-        destination
-  in
 
   let entry2str = lam holeInfo : NameInfo. lam path : [NameInfo]. lam i : Int.
     let funInfo : NameInfo = mapFindWithExn holeInfo hole2fun in
-    let path = eqPathVerbose path in
+    let path = eqPathVerbose path callGraph in
+    let info2strEsc = compose escapeString info2str in
     strJoin "\n"
-    [ concat "Index: " (int2string i)
-    , concat "Name: " (nameInfoGetStr holeInfo)
-    , concat "Defined at: " (info2str holeInfo.1)
-    , concat "Function: " (nameInfoGetStr funInfo)
-    , concat "Function defined at: " (info2str funInfo.1)
-    , concat "Call path (functions): " (strJoin " -> " (map nameInfoGetStr path))
-    , concat "Call path (info): " (strJoin " -> " (map (lam x : NameInfo. info2str x.1) path))
+    [ join [indexStr, " = ", (int2string i)]
+    , join [ valueStr, " = ",
+             use MExprPrettyPrint in
+             expr2str (get table i)
+           ]
+    , join [holeNameStr, " = \"", (nameInfoGetStr holeInfo), "\""]
+    , join [holeInfoStr, " = \"", (info2strEsc holeInfo.1), "\""]
+    , join [funNameStr, " = \"", (nameInfoGetStr funInfo), "\""]
+    , join [funInfoStr, " = \"", (info2strEsc funInfo.1), "\""]
+    , join [pathNameStr, " = ", listOfStrings (map nameInfoGetStr path)]
+    , join [pathInfoStr, " = ", listOfStrings (map (lam x : NameInfo. info2strEsc x.1) path)]
     ]
   in
   let taggedEntries =
@@ -77,7 +69,7 @@ let _tuneInfo = lam env : CallCtxEnv.
       taggedEntries
   in
   let entries = map (lam e : (Int, String). e.1) sortedTagged in
-  strJoin (join ["\n", make _sepLength '-', "\n"]) entries
+  concat "[[hole]]\n" (strJoin (join ["\n", "[[hole]]", "\n"]) entries)
 
 let tuneDumpTable =
   lam file : String.
@@ -89,7 +81,7 @@ let tuneDumpTable =
     , "\n"
     , make _sepLength '='
     , "\n"
-    , match env with Some env then _tuneInfo env else ""
+    , match env with Some env then _tuneInfo env table else ""
     , "\n"
     ] in
     writeFile destinationFile str

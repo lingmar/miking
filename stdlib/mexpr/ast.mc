@@ -23,10 +23,19 @@ lang Ast
   syn Pat =
   -- Intentionally left blank
 
+  sem infoTm =
+  -- Intentionally left blank
+
   sem ty =
   -- Intentionally left blank
 
   sem withType (ty : Type) =
+  -- Intentionally left blank
+
+  sem tyPat =
+  -- Intentionally left blank
+
+  sem withTypePat (ty : Type) =
   -- Intentionally left blank
 
   -- TODO(vipa, 2021-05-27): Replace smap and sfold with smapAccumL for Expr and Type as well
@@ -793,19 +802,33 @@ con PWildcard : () -> PatName
 lang NamedPat = MatchAst
   syn Pat =
   | PatNamed {ident : PatName,
-              info : Info}
+              info : Info,
+              ty : Type}
 
   sem infoPat =
   | PatNamed r -> r.info
+
+  sem tyPat =
+  | PatNamed r -> r.ty
+
+  sem withTypePat (ty : Type) =
+  | PatNamed r -> PatNamed {r with ty = ty}
 end
 
 lang SeqTotPat = MatchAst
   syn Pat =
   | PatSeqTot {pats : [Pat],
-               info : Info}
+               info : Info,
+               ty : Type}
 
   sem infoPat =
   | PatSeqTot r -> r.info
+
+  sem tyPat =
+  | PatSeqTot r -> r.ty
+
+  sem withTypePat (ty : Type) =
+  | PatSeqTot r -> PatSeqTot {r with ty = ty}
 
   sem smapAccumL_Pat_Pat (f : acc -> a -> (acc, b)) (acc : acc) =
   | PatSeqTot r ->
@@ -819,10 +842,17 @@ lang SeqEdgePat = MatchAst
   | PatSeqEdge {prefix : [Pat],
                 middle: PatName,
                 postfix : [Pat],
-                info: Info}
+                info: Info,
+                ty: Type}
 
   sem infoPat =
   | PatSeqEdge r -> r.info
+
+  sem tyPat =
+  | PatSeqEdge r -> r.ty
+
+  sem withTypePat (ty : Type) =
+  | PatSeqEdge r -> PatSeqEdge {r with ty = ty}
 
   sem smapAccumL_Pat_Pat (f : acc -> a -> (acc, b)) (acc : acc) =
   | PatSeqEdge p ->
@@ -836,10 +866,17 @@ end
 lang RecordPat = MatchAst
   syn Pat =
   | PatRecord {bindings : Map SID Pat,
-               info: Info}
+               info: Info,
+               ty: Type}
 
   sem infoPat =
   | PatRecord r -> r.info
+
+  sem tyPat =
+  | PatRecord r -> r.ty
+
+  sem withTypePat (ty : Type) =
+  | PatRecord r -> PatRecord {r with ty = ty}
 
   sem smapAccumL_Pat_Pat (f : acc -> a -> (acc, b)) (acc : acc) =
   | PatRecord p ->
@@ -852,10 +889,17 @@ lang DataPat = MatchAst + DataAst
   syn Pat =
   | PatCon {ident : Name,
             subpat : Pat,
-            info : Info}
+            info : Info,
+            ty : Type}
 
   sem infoPat =
   | PatCon r -> r.info
+
+  sem tyPat =
+  | PatCon r -> r.ty
+
+  sem withTypePat (ty : Type) =
+  | PatCon r -> PatCon {r with ty = ty}
 
   sem smapAccumL_Pat_Pat (f : acc -> a -> (acc, b)) (acc : acc) =
   | PatCon c ->
@@ -867,38 +911,66 @@ end
 lang IntPat = MatchAst + IntAst
   syn Pat =
   | PatInt {val : Int,
-          info : Info}
+            info : Info,
+            ty : Type}
 
   sem infoPat =
   | PatInt r -> r.info
+
+  sem tyPat =
+  | PatInt r -> r.ty
+
+  sem withTypePat (ty : Type) =
+  | PatInt r -> PatInt {r with ty = ty}
 end
 
 lang CharPat = MatchAst
   syn Pat =
   | PatChar {val : Char,
-             info : Info}
+             info : Info,
+             ty : Type}
 
   sem infoPat =
   | PatChar r -> r.info
+
+  sem tyPat =
+  | PatChar r -> r.ty
+
+  sem withTypePat (ty : Type) =
+  | PatChar r -> PatChar {r with ty = ty}
 end
 
 lang BoolPat = MatchAst + BoolAst
   syn Pat =
   | PatBool {val : Bool,
-             info : Info}
+             info : Info,
+             ty : Type}
 
   sem infoPat =
   | PatBool r -> r.info
+
+  sem tyPat =
+  | PatBool r -> r.ty
+
+  sem withTypePat (ty : Type) =
+  | PatBool r -> PatBool {r with ty = ty}
 end
 
 lang AndPat = MatchAst
   syn Pat =
   | PatAnd {lpat : Pat,
             rpat : Pat,
-            info : Info}
+            info : Info,
+            ty : Type}
 
   sem infoPat =
   | PatAnd r -> r.info
+
+  sem tyPat =
+  | PatAnd r -> r.ty
+
+  sem withTypePat (ty : Type) =
+  | PatAnd r -> PatAnd {r with ty = ty}
 
   sem smapAccumL_Pat_Pat (f : acc -> a -> (acc, b)) (acc : acc) =
   | PatAnd p ->
@@ -913,10 +985,17 @@ lang OrPat = MatchAst
   syn Pat =
   | PatOr {lpat : Pat,
            rpat : Pat,
-           info : Info}
+           info : Info,
+           ty : Type}
 
   sem infoPat =
   | PatOr r -> r.info
+
+  sem tyPat =
+  | PatOr r -> r.ty
+
+  sem withTypePat (ty : Type) =
+  | PatOr r -> PatOr {r with ty = ty}
 
   sem smapAccumL_Pat_Pat (f : acc -> a -> (acc, b)) (acc : acc) =
   | PatOr p ->
@@ -930,10 +1009,17 @@ end
 lang NotPat = MatchAst
   syn Pat =
   | PatNot {subpat : Pat,
-            info : Info}
+            info : Info,
+            ty : Type}
 
   sem infoPat =
   | PatNot r -> r.info
+
+  sem tyPat =
+  | PatNot r -> r.ty
+
+  sem withTypePat (ty : Type) =
+  | PatNot r -> PatNot {r with ty = ty}
 
   sem smapAccumL_Pat_Pat (f : acc -> a -> (acc, b)) (acc : acc) =
   | PatNot p ->
