@@ -536,7 +536,7 @@ let callCtxAddHole : Expr -> NameInfo -> [[NameInfo]] -> NameInfo -> CallCtxEnv 
     with (m, count) then
       let n = length paths in
       utest n with subi count countInit in
-      modref idx2hole (concat (deref idx2hole) (hcreate n (lam. hole)));
+      modref idx2hole (concat (deref idx2hole) (create n (lam. hole)));
       modref hole2idx (mapInsert name m (deref hole2idx));
       modref hole2fun (mapInsert name funName (deref hole2fun));
       modref hole2ty (mapInsert name (use HoleAst in ty hole) (deref hole2ty));
@@ -644,7 +644,7 @@ let _lookupCallCtx
                                    setInsert (head p) acc)
                                 (setEmpty nameInfoCmp) paths in
           let startVals = mapKeys startVals in
-          let partition = hcreate (length startVals) (lam. []) in
+          let partition = create (length startVals) (lam. []) in
           let partition =
             mapi
               (lam i. lam.

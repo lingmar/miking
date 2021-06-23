@@ -139,10 +139,10 @@ let ocamlCompileAst = lam options : Options. lam sourcePath. lam mexprAst.
 let compile = lam files. lam options : Options. lam args.
   use MCoreCompile in
   let compileFile = lam file.
-    let ast = makeKeywords [] (parseMCoreFile (cons "hcreate" decisionPointsKeywords) file) in
+    let ast = makeKeywords [] (parseMCoreFile decisionPointsKeywords file) in
 
     -- If option --enable-seq-transform, then transform sequence literals into
-    -- using hcreate
+    -- using create
     let ast = if options.seqTransform then seqTransform ast else ast in
 
     -- Insert tuned values, or use default values if no .tune file present

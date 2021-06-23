@@ -1,7 +1,7 @@
 include "option.mc"
 include "bool.mc"
 
-let make = lam n. lam v. hcreate n (lam. v)
+let make = lam n. lam v. create n (lam. v)
 
 utest make 3 5 with [5,5,5]
 utest make 4 'a' with ['a', 'a', 'a', 'a']

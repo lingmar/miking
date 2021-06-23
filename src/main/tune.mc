@@ -36,7 +36,7 @@ let tune = lam files. lam options : Options. lam args.
       let ast = makeKeywords [] (parseMCoreFile decisionPointsKeywords file) in
 
       -- If option --enable-seq-transform, then transform sequence literals into
-      -- using hcreate
+      -- using create
       let ast = if options.seqTransform then seqTransform ast else ast in
 
       -- If option --debug-parse, then pretty print the AST

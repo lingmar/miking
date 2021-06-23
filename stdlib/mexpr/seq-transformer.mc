@@ -2,7 +2,7 @@
 -- Copyright (C) David Broman. See file LICENSE.txt
 --
 -- Transforms an MExpr expression where sequence literals (TmSeq) are replaced
--- by a call to hcreate.
+-- by a call to create.
 
 include "ast.mc"
 include "pprint.mc"
@@ -15,26 +15,25 @@ lang SeqTransformer = SeqAst + VarAst + AppAst + UnknownTypeAst
   sem seqTransform =
   | t ->
     let name =
-      match findName "hcreate" t with Some name then name
-      else nameSym "hcreateDef"
+      match findName "create" t with Some name then name
+      else nameSym "createUnknown"
     in _seqTransform name t
 
-  -- TODO: recurse
-  sem _seqTransform (hcreate : Name) =
+  sem _seqTransform (create : Name) =
   | TmSeq {tms = tms, info = info} ->
     TmApp
-      { lhs = TmApp { lhs = TmVar {ident = hcreate, ty = tyunknown_, info = info}
+      { lhs = TmApp { lhs = TmVar {ident = create, ty = tyunknown_, info = info}
                     , rhs = int_ (length tms)
                     , ty = tyunknown_
                     , info = info
                     }
       , rhs =
         let i = nameSym "i" in
-        nulam_ i (get_ (seq_ (map (_seqTransform hcreate) tms)) (nvar_ i))
+        nulam_ i (get_ (seq_ (map (_seqTransform create) tms)) (nvar_ i))
       , ty = tyunknown_
       , info = info
       }
-  | t -> smap_Expr_Expr (_seqTransform hcreate) t
+  | t -> smap_Expr_Expr (_seqTransform create) t
 end
 
 lang TestLang = MExprAst + SeqTransformer + MExprPrettyPrint
