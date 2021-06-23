@@ -895,11 +895,7 @@ lang FlattenHoles = Ast2CallGraph + HoleAst + IntAst
 
   -- Function definitions: possibly update cur inside body of function
   | TmLet ({ body = TmLam lm } & t) ->
-    let curBody =
-      match callCtxFunLookup t.ident env with Some _
-      then (t.ident, t.info)
-      else cur
-    in
+    let curBody = (t.ident, t.info) in
     TmLet {{t with body = _maintainCallCtx lookup env eqPaths curBody t.body}
               with inexpr = _maintainCallCtx lookup env eqPaths cur t.inexpr}
 
@@ -907,11 +903,7 @@ lang FlattenHoles = Ast2CallGraph + HoleAst + IntAst
     let newBinds =
       map (lam bind : RecLetBinding.
         match bind with { body = TmLam lm } then
-          let curBody =
-            match callCtxFunLookup bind.ident env with Some _
-            then (bind.ident, bind.info)
-            else cur
-          in
+          let curBody = (bind.ident, bind.info) in
           {bind with body =
              _maintainCallCtx lookup env eqPaths curBody bind.body}
         else
