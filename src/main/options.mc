@@ -42,7 +42,7 @@ let optionsMap = [
 ("--disable-optimizations", lam o : Options. {o with disableOptimizations = true}),
 ("--use-tuned", lam o : Options. {o with useTuned = true}),
 ("--enable-seq-transform", lam o : Options. {o with seqTransform = true}),
-("--help", lam o : Options. {o with help = true})
+("--help", lam o : Options. {o with help = true}),
 ("--try-use-tuned", lam o : Options. {o with tryUseTuned = true}),
 ("--default-tune-file", lam o : Options. {o with useDefaultTuneFile = true})
 ]
