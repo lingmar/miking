@@ -48,6 +48,9 @@ let _nameMapInit : [a] -> (a -> Name) -> (a -> v) -> Map Name v =
       (mapEmpty nameCmp)
       items
 
+let _distinct = lam cmp. lam seq.
+  setToSeq (setOfSeq cmp seq)
+
 -------------------------
 -- Call graph creation --
 -------------------------
@@ -373,6 +376,12 @@ let holeIntRange_ = use HoleIntRangeAst in
 -- Call context environment --
 ------------------------------
 
+type Edge = (NameInfo, NameInfo, NameInfo)
+type Path = [Edge]
+
+let edgeCmp = lam e1 : Edge. lam e2 : Edge.
+  nameInfoCmp e1.2 e2.2
+
 -- Maintains call context information necessary for program transformations.
 -- Except for 'hole2idx' and 'count', the information is static.
 type CallCtxEnv = {
@@ -412,7 +421,10 @@ type CallCtxEnv = {
   hole2fun: Ref (Map NameInfo NameInfo),
 
   -- Maps a hole to its type
-  hole2ty: Ref (Map NameInfo Type)
+  hole2ty: Ref (Map NameInfo Type),
+
+  -- Maps a hole index to its edge path
+  verbosePath: Ref (Map Int Path)
 }
 
 -- Create a new name from a prefix string and name.
@@ -464,6 +476,7 @@ let callCtxInit : [NameInfo] -> CallGraph -> Expr -> CallCtxEnv =
     , idx2hole = ref []
     , hole2fun = ref (mapEmpty nameInfoCmp)
     , hole2ty = ref (mapEmpty nameInfoCmp)
+    , verbosePath = ref (mapEmpty subi)
     }
 
 -- Returns the incoming variable of a function name, or None () if the name is
@@ -509,23 +522,26 @@ let callCtxAddHole : Expr -> NameInfo -> [[NameInfo]] -> NameInfo -> CallCtxEnv 
   lam hole. lam name. lam paths. lam funName. lam env : CallCtxEnv.
     match env with
       { hole2idx = hole2idx, idx2hole = idx2hole, hole2fun = hole2fun,
-        hole2ty = hole2ty }
+        hole2ty = hole2ty, verbosePath = verbosePath}
     then
     let countInit = length (deref idx2hole) in
     match
       foldl
-      (lam acc. lam k.
-         match acc with (m, i) then (mapInsert k i m, addi i 1)
+      (lam acc. lam path.
+         match acc with (m, verbose, i) then
+           let lblPath = map (lam e : Edge. e.2) path in
+           (mapInsert lblPath i m, mapInsert i path verbose, addi i 1)
          else never)
-      (mapEmpty _cmpPaths, countInit)
+      (mapEmpty _cmpPaths, deref env.verbosePath, countInit)
       paths
-    with (m, count) then
+    with (m, verbose, count) then
       let n = length paths in
       utest n with subi count countInit in
       modref idx2hole (concat (deref idx2hole) (create n (lam. hole)));
       modref hole2idx (mapInsert name m (deref hole2idx));
       modref hole2fun (mapInsert name funName (deref hole2fun));
       modref hole2ty (mapInsert name (use HoleAst in ty hole) (deref hole2ty));
+      modref verbosePath verbose;
       env
     else never
   else never
@@ -732,22 +748,22 @@ lang FlattenHoles = Ast2CallGraph + HoleAst + IntAst
 
     -- Prune the call graph
     let eqPathsAssoc = _eqPaths g publicFns _callGraphTop tm in
-    let eqPathsMap : Map NameInfo [[NameInfo]] = mapFromSeq nameInfoCmp eqPathsAssoc in
-    let keepLbls : [NameInfo] =
-      foldl (lam acc. lam path : (NameInfo, [[NameInfo]]).
+    let eqPathsMap : Map NameInfo [Path] = mapFromSeq nameInfoCmp eqPathsAssoc in
+    let keepEdges : [Edge] =
+      foldl (lam acc. lam path : (NameInfo, [[(NameInfo,NameInfo,NameInfo)]]).
                concat acc (foldl concat [] path.1))
         [] eqPathsAssoc
     in
 
+    let keepEdges = _distinct edgeCmp keepEdges in
+
     let pruned = foldl (lam acc. lam e : DigraphEdge NameInfo NameInfo.
       match e with (from, to, lbl) then
-        if any (nameInfoEq lbl) keepLbls then
-          digraphAddEdge from to lbl
-            (digraphMaybeAddVertex from (digraphMaybeAddVertex to acc))
-        else acc
+        digraphAddEdge from to lbl
+          (digraphMaybeAddVertex from (digraphMaybeAddVertex to acc))
       else never)
       (digraphEmpty nameInfoCmp nameInfoEq)
-      (digraphEdges g) in
+      keepEdges in
 
     -- Initialize environment
     let env = callCtxInit publicFns pruned tm in
@@ -853,7 +869,7 @@ lang FlattenHoles = Ast2CallGraph + HoleAst + IntAst
   -- Maintain call context history by updating incoming variables before
   -- function calls.
   sem _maintainCallCtx (lookup : Lookup) (env : CallCtxEnv)
-                       (eqPaths : Map NameInfo [[NameInfo]]) (cur : NameInfo) =
+                       (eqPaths : Map NameInfo [Path]) (cur : NameInfo) =
   -- Application: caller updates incoming variable of callee
   | TmLet ({ body = TmApp a } & t) ->
     -- NOTE(Linnea, 2021-01-29): ANF form means no recursion necessary for the
@@ -888,7 +904,8 @@ lang FlattenHoles = Ast2CallGraph + HoleAst + IntAst
         let paths = mapFindWithExn (ident, t.info) eqPaths in
         let env = callCtxAddHole t.body (ident, t.info) paths cur env in
         let iv = callCtxFun2Inc cur.0 env in
-        _lookupCallCtx lookup (ident, t.info) iv env paths
+        let lblPaths = map (lam p. map (lam e : Edge. e.2) p) paths in
+        _lookupCallCtx lookup (ident, t.info) iv env lblPaths
     in
     TmLet {{t with body = lookupCode}
               with inexpr = _maintainCallCtx lookup env eqPaths cur t.inexpr}

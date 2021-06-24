@@ -24,7 +24,7 @@ let eqPaths : Digraph -> a -> Int -> [a] -> [[a]] =
         else
           let paths =
             map (lam edge : DigraphEdge v l.
-                   traverse g edge.1 (cons edge.2 curPath) (cons v visited) (subi d 1))
+                   traverse g edge.1 (cons edge curPath) (cons v visited) (subi d 1))
                 fromEdges in
           -- If current node is a start node, the current path is a valid path
           let paths =
@@ -32,7 +32,8 @@ let eqPaths : Digraph -> a -> Int -> [a] -> [[a]] =
             else paths in
           foldl concat [] paths
     in
-    traverse gRev endNode [] [] depth
+    let res = traverse gRev endNode [] [] depth in
+    map (lam p. map (lam e : (Unknown, Unknown, Unknown). (e.1, e.0, e.2)) p) res
 
 mexpr
 -- To construct test graphs
@@ -40,6 +41,11 @@ let empty = digraphEmpty subi eqChar in
 let fromList = lam vs. foldl (lam g. lam v. digraphAddVertex v g) empty vs in
 let addEdges = lam g. lam es.
   foldl (lam acc. lam e : DigraphEdge v l. digraphAddEdge e.0 e.1 e.2 acc) g es
+in
+
+let eqPaths = lam g. lam endNode. lam depth. lam startNodes.
+  map (lam p. map (lam e : (Unknown, Unknown, Unknown). e.2) p)
+    (eqPaths g endNode depth startNodes)
 in
 
 -- Create some labels
