@@ -38,11 +38,13 @@ let _tuneTable2str = lam table : LookupTable.
 let _tuneInfo = lam env : CallCtxEnv. lam table : LookupTable.
   let hole2idx = deref env.hole2idx in
   let hole2fun = deref env.hole2fun in
+  let verbosePath = deref env.verbosePath in
   let callGraph = env.callGraph in
 
   let entry2str = lam holeInfo : NameInfo. lam path : [NameInfo]. lam i : Int.
     let funInfo : NameInfo = mapFindWithExn holeInfo hole2fun in
-    let path = eqPathVerbose path callGraph in
+    let path = vertexPath i env in
+
     let info2strEsc = compose escapeString info2str in
     strJoin "\n"
     [ join [indexStr, " = ", (int2string i)]

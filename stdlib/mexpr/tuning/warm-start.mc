@@ -201,19 +201,16 @@ let parseHoleInfo : String -> HoleInfo = lam str.
       else never
   in work holeInfoEmpty entries
 
-let eqPathVerbose
-  : [NameInfo] -> CallGraph -> [NameInfo]
-  = lam path. lam g.
-    let edgePath =
-      filter (lam e : (NameInfo, NameInfo, NameInfo).
-        any (nameInfoEq e.2) path) (digraphEdges g)
-    in
+let vertexPath : Int -> Env -> [NameInfo] = lam i. lam env : CallCtxEnv.
+  match env with {verbosePath = verbosePath} then
+    let edgePath = mapFindWithExn i (deref verbosePath) in
     match edgePath with [] then []
     else
       let lastEdge : (NameInfo, NameInfo, NameInfo) = last edgePath in
       let destination = lastEdge.1 in
       snoc (map (lam e : (NameInfo, NameInfo, NameInfo). e.0) edgePath)
-      destination
+        destination
+  else never
 
 let _parseInt : Expr -> Int = use IntAst in
   lam t.
@@ -257,12 +254,12 @@ let env2holeInfo : CallCtxEnv -> HoleInfo = lam env.
       let globalInfo : GlobalInfo = (holeName, holeInfo, funName, funInfo) in
       let expansions =
         foldl (lam acc. lam path : [NameInfo].
-          let pathVerbose = eqPathVerbose path callGraph in
+          let i = mapFindWithExn path bind.1 in
+          let pathVerbose = vertexPath i env in
           match unzip pathVerbose with (funNames, funInfos) then
             let funNames : [String] = map nameGetStr funNames in
             let newPath : [PathInfo] = zipWith (lam n. lam i. (n, i)) funNames funInfos in
             -- Store the index of the hole to build flat lookup table later
-            let i = mapFindWithExn path bind.1 in
             let v =
               match mapLookup newPath acc with Some vals then
                 _seq2expr (cons i (_expr2seq vals))

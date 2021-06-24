@@ -24,7 +24,7 @@ let eqPaths : Digraph -> a -> Int -> [a] -> [[a]] =
         else
           let paths =
             map (lam edge : DigraphEdge v l.
-                   traverse g edge.1 (cons (edge.1, edge.0, edge.2) curPath) (cons v visited) (subi d 1))
+                   traverse g edge.1 (cons edge curPath) (cons v visited) (subi d 1))
                 fromEdges in
           -- If current node is a start node, the current path is a valid path
           let paths =
@@ -32,7 +32,8 @@ let eqPaths : Digraph -> a -> Int -> [a] -> [[a]] =
             else paths in
           foldl concat [] paths
     in
-    traverse gRev endNode [] [] depth
+    let res = traverse gRev endNode [] [] depth in
+    map (lam p. map (lam e : (Unknown, Unknown, Unknown). (e.1, e.0, e.2)) p) res
 
 let eqPathsToLbls : [[DigraphEdge v l]] -> [[l]] = lam paths.
   map (lam p. map (lam e : DigraphEdge v l. e.2) p) paths
