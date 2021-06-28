@@ -1,69 +1,75 @@
 
 include "atomic.mc"
 include "thread.mc"
+include "mutex.mc"
+include "cond.mc"
 include "option.mc"
 include "string.mc"
 include "common.mc"
 
--- Implements a FIFO queue with a single sender and multiple receiver threads.
--- The channel has an infinite buffer, so a call to channelSend never blocks.
+-- Implements a FIFO queue with a multiple senders and multiple receiver
+-- threads. The channel has an infinite buffer, so a call to channelSend never
+-- blocks.
 
-type Channel a = {contents : Aref [a], receivers : Aref [Int]}
+type Channel a = {contents : Aref [a], lock : Mutex, nonEmpty : Cond}
 
 let channelEmpty : Unit -> Channel a = lam.
-  {contents = atomicMake [], receivers = atomicMake []}
+  { contents = atomicMake []
+  , lock = mutexCreate ()
+  , nonEmpty = condCreate ()
+  }
 
--- Wake up receivers
-recursive let channelSend : Channel a -> a -> Unit = lam chan. lam msg.
+-- 'channelSend c msg' sends the message 'msg' to the channel 'c'
+let channelSend : Channel a -> a -> Unit = lam chan. lam msg.
+  mutexLock chan.lock;
+
   let old = atomicGet chan.contents in
   let new = snoc old msg in
-  if atomicCAS chan.contents old new then
-    recursive let wakeUpRecv = lam.
-      let waiting = atomicGet chan.receivers in
-      if null waiting then ()
-      else if atomicCAS chan.receivers waiting (tail waiting) then
-        -- Wake up one receiver
-        threadNotify (head waiting)
-      else
-        threadCPURelax ();
-        wakeUpRecv ()
-    in wakeUpRecv ()
-  else threadCPURelax (); channelSend chan msg
-end
+  (utest atomicCAS chan.contents old new with true in ());
+  atomicSet chan.contents new;
 
-recursive let channelRecv : Channel a -> a = lam chan.
-  let contents = atomicGet chan.contents in
-  match contents with [] then
-    threadCriticalSection (lam.
-      recursive let addToReceivers = lam.
-        let receivers = atomicGet chan.receivers in
-        if atomicCAS chan.receivers receivers (snoc receivers (threadSelf ()))
-        then ()
-        else
-          threadCPURelax ();
-          addToReceivers ()
-      in
-      addToReceivers ();
-      -- Wait here until there are tasks available
-      threadWait ());
-    channelRecv chan
-  else match contents with [msg] ++ new then
-    if atomicCAS chan.contents contents new then
-      -- Got the message
+  condSignal chan.nonEmpty;
+  mutexRelease chan.lock
+
+-- 'channelRecv c' receives a message from the channel 'c'. Blocks until there
+-- is at least one message in the channel.
+let channelRecv : Channel a -> a = lam chan.
+  mutexLock chan.lock;
+
+  recursive let waitForMsg : Unit -> a = lam.
+    let contents = atomicGet chan.contents in
+    match contents with [] then
+      condWait chan.nonEmpty chan.lock;
+      waitForMsg ()
+    else match contents with [msg] ++ rest then
+      (utest atomicCAS chan.contents contents rest with true in ());
+      atomicSet chan.contents rest;
       msg
-    else
-      -- Someone else got there first, try again
-      threadCPURelax ();
-      channelRecv chan
-  else never
-end
+    else never
+  in
 
+  let msg = waitForMsg () in
+
+  mutexRelease chan.lock;
+  msg
+
+-- 'channelRecvOpt c' is non-blocking version of 'channelRecv'. If the channel
+-- is empty, then None () is immediately returned, instead of blocking the call.
 let channelRecvOpt : Channel a -> Option a = lam chan.
-  let contents = atomicGet chan.contents in
-  match contents with [] then None ()
-  else if atomicCAS chan.contents contents (tail contents) then
-    Some (head contents)
-  else None ()
+  mutexLock chan.lock;
+
+  let msg =
+    let contents = atomicGet chan.contents in
+    match contents with [] then None ()
+    else match contents with [msg] ++ rest then
+      (utest atomicCAS chan.contents contents rest with true in ());
+      atomicSet chan.contents rest;
+      Some msg
+    else never
+  in
+
+  mutexRelease chan.lock;
+  msg
 
 mexpr
 
@@ -74,9 +80,9 @@ utest channelSend c 2 with () in
 utest channelRecv c with 1 in
 utest channelRecv c with 2 in
 
-utest channelRecvOpt c with None () using optionEq eqi in
+utest channelRecvOpt c with None () in
 channelSend c 2;
-utest channelRecvOpt c with Some 2 using optionEq eqi in
+utest channelRecvOpt c with Some 2 in
 
 let debug = false in
 let debugPrintLn = if debug then printLn else (lam x. x) in
@@ -89,7 +95,7 @@ let threads = map (lam.
     debugPrintLn (join [int2string (threadSelf ()), " got ", int2string res])))
   (make 10 ()) in
 
-mapi (lam i. lam. channelSend c i) (make 10 ());
+iteri (lam i. lam. channelSend c i) (make 10 ());
 
 iter threadJoin threads;
 
