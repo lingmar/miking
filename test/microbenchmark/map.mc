@@ -3,11 +3,19 @@ include "benchmarkcommon.mc"
 include "string.mc"
 include "common.mc"
 include "mapn.ml"
+include "multicore/pseq.mc"
 
 mexpr
 
+recursive
+let fact = lam n.
+  if eqi n 0
+  then 1
+  else muli n (fact (subi n 1))
+in
+
 let mapf = lam n.
-  map (addi 1) (createList n (lam i. i))
+  map (lam. fact 50) (createRope n (lam i. i))
 in
 
 -- iter (lam x. print (int2string x)) (mapf n);

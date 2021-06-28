@@ -1,12 +1,23 @@
 
 include "benchmarkcommon.mc"
+include "string.mc"
+include "common.mc"
+include "mapn.ml"
 include "multicore/pseq.mc"
-include "map.ml"
 
 mexpr
 
-let pmapf = lam n.
-  pmap (addi 1) (create n (lam i. i))
+recursive
+let fact = lam n.
+  if eqi n 0
+  then 1
+  else muli n (fact (subi n 1))
 in
 
-repeat (lam. pmapf n)
+let mapf = lam n.
+  pmap (lam. fact 50) (createRope n (lam i. i))
+in
+
+-- iter (lam x. print (int2string x)) (mapf n);
+
+repeat (lam. mapf n)
