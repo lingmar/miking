@@ -23,5 +23,11 @@ let mutexExtMap =
     { ident = "Mutex.unlock"
     , ty = tyarrow_ tymutex_ otyunit_
     , libraries = []
+    }]),
+
+    ("externalMutexTryLock", [
+    { ident = "Mutex.try_lock"
+    , ty = tyarrow_ tymutex_ tybool_
+    , libraries = []
     }])
   ]
