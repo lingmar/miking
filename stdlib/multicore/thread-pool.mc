@@ -19,11 +19,7 @@ recursive let _wait = lam chan.
     atomicSet r (Some (f ()));
     _wait chan
   else match msg with Quit _ then ()
-<<<<<<< HEAD
-  else threadCPURelax (); _wait chan
-=======
   else never
->>>>>>> threadpool
 end
 
 let threadPoolCreate : Int -> ThreadPool = lam n.
@@ -31,23 +27,14 @@ let threadPoolCreate : Int -> ThreadPool = lam n.
   {threads = create n (lam. threadSpawn (lam. _wait chan)), queue = chan}
 
 let threadPoolTearDown : ThreadPool -> Unit = lam pool.
-<<<<<<< HEAD
   channelSendMany pool.queue (map (lam. Quit ()) pool.threads);
   iter threadJoin pool.threads
-=======
-  iter (lam. channelSend pool.queue (Quit ())) pool.threads
->>>>>>> threadpool
 
 let threadPoolAsync : ThreadPool -> (Unit -> a) -> Async a = lam pool. lam task.
   let r = atomicMake (None ()) in
   channelSend pool.queue (Task {task = task, result = r});
   r
 
-<<<<<<< HEAD
-recursive let threadPoolWait : Async a -> a = lam r.
-  match atomicGet r with Some v then v
-  else threadCPURelax (); threadPoolWait r
-=======
 recursive let threadPoolWait : ThreadPool -> Async a -> a = lam pool. lam r.
   match atomicGet r with Some v then v
   else match channelRecvOpt pool.queue
@@ -58,17 +45,12 @@ recursive let threadPoolWait : ThreadPool -> Async a -> a = lam pool. lam r.
     threadPoolWait pool r
   else
     threadCPURelax (); threadPoolWait pool r
->>>>>>> threadpool
 end
 
 -- Global thread pool
 let threadPoolGlobal =
   let nproc = (sysRunCommand ["nproc"] "" ".").stdout in
-<<<<<<< HEAD
-  threadPoolCreate (string2int nproc)
-=======
   threadPoolCreate (string2int (strTrim nproc))
->>>>>>> threadpool
 
 mexpr
 
@@ -78,27 +60,12 @@ utest
 with () in
 
 utest
-<<<<<<< HEAD
-  let pool = threadPoolCreate 4 in
-=======
   let pool = threadPoolCreate 2 in
->>>>>>> threadpool
   let r1 = threadPoolAsync pool (lam. addi 0 1) in
   let r2 = threadPoolAsync pool (lam. addi 0 2) in
   let r3 = threadPoolAsync pool (lam. addi 0 3) in
   let r4 = threadPoolAsync pool (lam. addi 0 4) in
   let r5 = threadPoolAsync pool (lam. addi 0 5) in
-<<<<<<< HEAD
-  let r =
-  [ threadPoolWait r1
-  , threadPoolWait r2
-  , threadPoolWait r3
-  , threadPoolWait r4
-  , threadPoolWait r5
-  ] in
-  threadPoolTearDown pool; r
-with [1,2,3,4,5] in
-=======
   let r6 = threadPoolAsync pool (lam. addi 0 6) in
   let r =
   [ threadPoolWait pool r1
@@ -110,6 +77,5 @@ with [1,2,3,4,5] in
   ] in
   threadPoolTearDown pool; r
 with [1,2,3,4,5,6] in
->>>>>>> threadpool
 
 ()
