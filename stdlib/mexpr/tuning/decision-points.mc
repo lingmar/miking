@@ -769,10 +769,6 @@ lang FlattenHoles = Ast2CallGraph + HoleAst + IntAst
                concat acc (foldl concat [] path.1))
         [] eqPathsAssoc
     in
-    let eqPathsMap : Map NameInfo [[NameInfo]] =
-      mapFromSeq nameInfoCmp (map (lam e : (Name, [[(NameInfo, NameInfo, NameInfo)]]).
-        (e.0, eqPathsToLbls e.1)) eqPathsAssoc)
-    in
 
     let edgeCmp = lam e1 : DigraphEdge NameInfo NameInfo. lam e2 : DigraphEdge NameInfo NameInfo.
       nameInfoCmp e1.2 e2.2
@@ -991,14 +987,32 @@ lang FlattenHoles = Ast2CallGraph + HoleAst + IntAst
 
     let join = lam seqs. foldl concat [] seqs in
 
-    recursive
-      let strSplit = lam delim. lam s.
-        if or (null delim) (lti (length s) (length delim))
-        then [s]
-        else if eqString delim (subsequence s 0 (length delim))
-             then cons [] (strSplit delim (subsequence s (length delim) (length s)))
-             else let remaining = strSplit delim (tail s) in
-                  cons (cons (head s) (head remaining)) (tail remaining)
+    let eqStringSlice = lam s1. lam s2. lam o2. lam n2.
+      recursive let work = lam i.
+        if eqi i n2 then true
+        else if eqc (get s1 i) (get s2 (addi o2 i)) then work (addi i 1)
+        else false
+      in
+      if eqi (length s1) n2 then
+      work 0
+      else false
+    in
+
+    -- Splits s on delim
+    let strSplit = lam delim. lam s.
+      let n = length s in
+      let m = length delim in
+      recursive let work = lam acc. lam lastMatch. lam i.
+        if lti (subi n m) i then
+          snoc acc (subsequence s lastMatch n)
+        else if eqStringSlice delim s i m then
+          let nexti = addi i m in
+          work (snoc acc (subsequence s lastMatch (subi i lastMatch))) nexti nexti
+        else
+          work acc lastMatch (addi i 1)
+      in
+      if eqi (length delim) 0 then [s]
+      else work [] 0 0
     in
 
     let string2bool = lam s : String.
@@ -1026,13 +1040,12 @@ lang FlattenHoles = Ast2CallGraph + HoleAst + IntAst
     in
 
     let strIndex = lam c. lam s.
-      recursive let strIndex_rechelper = lam i. lam c. lam s.
-        if null s
-        then error (join [\"Expected an occurrence of \'\", [c],\"\'\"])
-        else if eqc c (head s)
-        then i
-        else strIndex_rechelper (addi i 1) c (tail s)
-      in strIndex_rechelper 0 c s
+      let n = length s in
+      recursive let work = lam i.
+        if geqi i n then error \"strIndex\"
+        else if eqc c (get s i) then i
+        else work (addi i 1)
+      in work 0
     in
 
     let string2int = lam s.

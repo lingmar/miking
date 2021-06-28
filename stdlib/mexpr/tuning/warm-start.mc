@@ -17,6 +17,15 @@ let funInfoStr = "function_info"
 let pathNameStr = "call_path_functions"
 let pathInfoStr = "call_path_infos"
 
+let _strIndex = lam c. lam s.
+  let n = length s in
+    recursive let work = lam i.
+    if geqi i n then None ()
+    else if eqc c (get s i) then Some i
+    else work (addi i 1)
+  in work 0
+
+
 recursive let cmpLex : [a -> a -> Int] -> a -> a -> Int =
   lam cmp. lam a. lam b.
     match cmp with [] then 0
@@ -131,7 +140,7 @@ let parseHoleInfo : String -> HoleInfo = lam str.
   recursive let createMap = lam acc. lam rows.
     match rows with [] then acc
     else match rows with [r] ++ rows then
-      match strIndex '=' r with Some i then
+      match _strIndex '=' r with Some i then
         match splitAt r i with (key, value) then
           createMap
             (mapInsert (strTrim key) (strTrim (tail value)) acc)
@@ -430,6 +439,8 @@ let matchHoleInfos : HoleInfo -> CallCtxEnv -> (LookupTable, String) =
     let params = distParams in
     let newHoleInfo = env2holeInfo env in
 
+    fprintLn "after env2holeInfo";
+
     -- Find the best globally matched old hole for each new hole
     let bestMatchGlobals : Map GlobalInfo (Float, GlobalInfo) =
       foldl (lam acc : Map GlobalInfo GlobalInfo. lam new : (GlobalInfo, Type).
@@ -451,6 +462,8 @@ let matchHoleInfos : HoleInfo -> CallCtxEnv -> (LookupTable, String) =
       (mapEmpty globalCmp)
       (mapBindings newHoleInfo.globals)
     in
+
+    fprintLn "global dist";
 
     -- Compute best context expanded matches for the global matches
     let bestMatchExpanded
@@ -492,6 +505,8 @@ let matchHoleInfos : HoleInfo -> CallCtxEnv -> (LookupTable, String) =
         (mapEmpty globalCmp)
         (mapBindings newHoleInfo.expansions)
     in
+
+    fprintLn "context dist";
 
     -- Compute a lookup table from the match
     let tableMap : Map Int (Expr, String) =
@@ -545,6 +560,8 @@ let matchHoleInfos : HoleInfo -> CallCtxEnv -> (LookupTable, String) =
       (mapBindings newHoleInfo.expansions)
     in
 
+    fprintLn "computed table";
+
     let tableAndStrings = mapValues tableMap in
     match unzip tableAndStrings with (table, strings) then
       (table, strJoin "\n" strings)
@@ -552,10 +569,13 @@ let matchHoleInfos : HoleInfo -> CallCtxEnv -> (LookupTable, String) =
 
 let matchHoles = lam tuneFile : String. lam env : CallCtxEnv.
   let str = readFile tuneFile in
-  match strIndex '[' (readFile tuneFile) with Some i then
+  match _strIndex '[' (readFile tuneFile) with Some i then
+    fprintLn "after strIndex";
     match splitAt str i with (_, suffix) then
+      fprintLn "after splitAt";
       -- Compute the old and new hole info structs
       let old = parseHoleInfo suffix in
+      fprintLn "after parse";
       matchHoleInfos old env
     else error "impossible"
   else error "Cannot read info from tune file"
