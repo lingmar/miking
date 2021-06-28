@@ -19,7 +19,7 @@ recursive let _wait = lam chan.
     atomicSet r (Some (f ()));
     _wait chan
   else match msg with Quit _ then ()
-  else threadCPURelax (); _wait chan
+  else never
 end
 
 let threadPoolCreate : Int -> ThreadPool = lam n.
@@ -36,10 +36,11 @@ let threadPoolAsync : ThreadPool -> (Unit -> a) -> Async a = lam pool. lam task.
 
 recursive let threadPoolWait : ThreadPool -> Async a -> a = lam pool. lam r.
   match atomicGet r with Some v then v
-  else match channelRecvOpt pool.queue with Some (Task {task = f, result = r})
+  else match channelRecvOpt pool.queue
+  with Some (Task {task = task, result = result})
   then
     -- Do some work while we're waiting
-    atomicSet r (Some (f ()));
+    atomicSet result (Some (task ()));
     threadPoolWait pool r
   else
     threadCPURelax (); threadPoolWait pool r
@@ -48,7 +49,7 @@ end
 -- Global thread pool
 let threadPoolGlobal =
   let nproc = (sysRunCommand ["nproc"] "" ".").stdout in
-  threadPoolCreate (string2int nproc)
+  threadPoolCreate (string2int (strTrim nproc))
 
 mexpr
 
@@ -58,20 +59,22 @@ utest
 with () in
 
 utest
-  let pool = threadPoolCreate 4 in
+  let pool = threadPoolCreate 2 in
   let r1 = threadPoolAsync pool (lam. addi 0 1) in
   let r2 = threadPoolAsync pool (lam. addi 0 2) in
   let r3 = threadPoolAsync pool (lam. addi 0 3) in
   let r4 = threadPoolAsync pool (lam. addi 0 4) in
   let r5 = threadPoolAsync pool (lam. addi 0 5) in
+  let r6 = threadPoolAsync pool (lam. addi 0 6) in
   let r =
   [ threadPoolWait pool r1
   , threadPoolWait pool r2
   , threadPoolWait pool r3
   , threadPoolWait pool r4
   , threadPoolWait pool r5
+  , threadPoolWait pool r6
   ] in
   threadPoolTearDown pool; r
-with [1,2,3,4,5] in
+with [1,2,3,4,5,6] in
 
 ()

@@ -86,17 +86,21 @@ utest channelRecvOpt c with Some 2 in
 
 let debug = false in
 let debugPrintLn = if debug then printLn else (lam x. x) in
+let n = 100 in
 
 let threads = map (lam.
   threadSpawn (lam.
     let id = int2string (threadSelf ()) in
     debugPrintLn (concat id " running");
     let res = channelRecv c in
-    debugPrintLn (join [int2string (threadSelf ()), " got ", int2string res])))
-  (make 10 ()) in
+    debugPrintLn (join [int2string (threadSelf ()), " got ", int2string res]);
+    res))
+  (make n ()) in
 
-iteri (lam i. lam. channelSend c i) (make 10 ());
+iteri (lam i. lam. channelSend c i) (make n ());
 
-iter threadJoin threads;
+let res = map threadJoin threads in
+
+utest length (distinct eqi res) with n in
 
 ()
