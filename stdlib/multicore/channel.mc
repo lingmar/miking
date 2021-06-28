@@ -31,6 +31,18 @@ let channelSend : Channel a -> a -> Unit = lam chan. lam msg.
   condSignal chan.nonEmpty;
   mutexRelease chan.lock
 
+-- 'channelSend c msg' sends the message 'msg' to the channel 'c'
+let channelSendMany : Channel a -> [a] -> Unit = lam chan. lam msgs.
+  mutexLock chan.lock;
+
+  let old = atomicGet chan.contents in
+  let new = concat old msgs in
+  (utest atomicCAS chan.contents old new with true in ());
+  atomicSet chan.contents new;
+
+  iter (lam. condSignal chan.nonEmpty) msgs;
+  mutexRelease chan.lock
+
 -- 'channelRecv c' receives a message from the channel 'c'. Blocks until there
 -- is at least one message in the channel.
 let channelRecv : Channel a -> a = lam chan.
@@ -102,5 +114,21 @@ iteri (lam i. lam. channelSend c i) (make n ());
 let res = map threadJoin threads in
 
 utest length (distinct eqi res) with n in
+
+let threads = map (lam.
+  threadSpawn (lam.
+    let id = int2string (threadSelf ()) in
+    debugPrintLn (concat id " running");
+    let res = channelRecv c in
+    debugPrintLn (join [int2string (threadSelf ()), " got ", int2string res]);
+    res))
+  (make n ()) in
+
+channelSendMany c (create n (lam i. i));
+
+let res = map threadJoin threads in
+
+utest length (distinct eqi res) with n in
+
 
 ()
