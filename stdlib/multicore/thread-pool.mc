@@ -27,7 +27,8 @@ let threadPoolCreate : Int -> ThreadPool = lam n.
   {threads = create n (lam. threadSpawn (lam. _wait chan)), queue = chan}
 
 let threadPoolTearDown : ThreadPool -> Unit = lam pool.
-  iter (lam. channelSend pool.queue (Quit ())) pool.threads
+  channelSendMany pool.queue (map (lam. Quit ()) pool.threads);
+  iter threadJoin pool.threads
 
 let threadPoolAsync : ThreadPool -> (Unit -> a) -> Async a = lam pool. lam task.
   let r = atomicMake (None ()) in
