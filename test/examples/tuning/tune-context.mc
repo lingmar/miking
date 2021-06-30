@@ -2,8 +2,8 @@ include "string.mc"
 include "common.mc"
 
 let foo = lam n.
-  let h1 = holeBool {default = true, depth = 1} in
-  let h2 = holeBool {default = true, depth = 1} in
+  let h1 = hole (Boolean {default = true, depth = 1}) in
+  let h2 = hole (Boolean {default = true, depth = 1}) in
   printLn (join ["Value of h1 ", if h1 then "true" else "false", "\n"]);
   printLn (join ["Value of h2 ", if h2 then "true" else "false", "\n"]);
   printLn (join ["Value of n ", int2string n, "\n"]);

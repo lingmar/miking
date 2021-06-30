@@ -28,6 +28,7 @@ let pmap = lam f. lam seq.
   join (chunkWork seq (map f))
 
 utest pmap (lam i. i) [1,2,3] with [1,2,3]
+utest pmap (lam i. addi i 1) [1,2,3] with [2,3,4]
 
 let pfold = lam f. lam acc. lam seq.
   foldl f acc (chunkWork seq (foldl f acc))
