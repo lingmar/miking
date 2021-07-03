@@ -137,6 +137,7 @@ let parseInfo = lam str.
   parseInfoFilename info
 
 let parseHoleInfo : String -> HoleInfo = lam str.
+  printLn "in parseHoleInfo";
   recursive let createMap = lam acc. lam rows.
     match rows with [] then acc
     else match rows with [r] ++ rows then
