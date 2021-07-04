@@ -16,6 +16,16 @@ utest absf (negf 1.) with 1. using eqf
 let maxi = lam r. lam l. if gti r l then r else l
 let mini = lam r. lam l. if lti r l then r else l
 let absi = lam i. maxi i (negi i)
+let sqrti = lam n.
+  recursive let work = lam n.
+    match n with 1 then 1
+    else
+      let nn = work (subi n 1) in
+      divi (addi nn (divi n nn)) 2
+  in
+  match n with 0 then 0
+  else if gti n 0 then work n
+  else error "sqrti of a negative number"
 
 utest maxi 0 0 with 0
 utest maxi 1 0 with 1
@@ -30,3 +40,8 @@ utest absi 1 with 1
 utest absi (negi 1) with 1
 
 utest addi 1 (negi 1) with 0
+
+utest sqrti 0 with 0
+utest sqrti 1 with 1
+utest sqrti 2 with 1
+utest sqrti 4 with 2

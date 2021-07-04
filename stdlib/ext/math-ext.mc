@@ -53,3 +53,7 @@ utest atan2 0. 1. with 0. using eqf
 external externalPow : Float -> Float -> Float
 let pow = lam x. lam y. externalPow x y
 utest pow 3. 2. with 9. using eqf
+
+external externalSqrtf : Float -> Float
+let sqrtf = lam x. externalSqrtf x
+utest sqrtf 4. with 2. using eqf
