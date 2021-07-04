@@ -6,6 +6,7 @@ include "decision-points.mc"
 include "tune-options.mc"
 include "common.mc"
 include "warm-start.mc"
+include "tune-file.mc"
 
 -- Performs tuning of a flattened program with decision points.
 
@@ -16,62 +17,15 @@ let _inputEmpty = [""]
 -- Reading/writing tuned values --
 ----------------------------------
 
-let tuneFileExtension = ".tune"
-
 let _delim = "\n"
 
 let _sepLength = 20
-
-let tuneFileName = lam file.
-  let withoutExtension =
-    match strLastIndex '.' file with Some idx then
-      subsequence file 0 idx
-    else file
-  in concat withoutExtension tuneFileExtension
 
 let _tuneTable2str = lam table : LookupTable.
   use MExprPrettyPrint in
   let rows = mapi (lam i. lam expr.
     join [int2string i, ": ", expr2str expr]) table in
   strJoin _delim rows
-
-let _tuneInfo = lam env : CallCtxEnv. lam table : LookupTable.
-  let hole2idx = deref env.hole2idx in
-  let hole2fun = deref env.hole2fun in
-  let verbosePath = deref env.verbosePath in
-  let callGraph = env.callGraph in
-
-  let entry2str = lam holeInfo : NameInfo. lam path : [NameInfo]. lam i : Int.
-    let funInfo : NameInfo = mapFindWithExn holeInfo hole2fun in
-    let path = vertexPath i env in
-
-    let info2strEsc = compose escapeString info2str in
-    strJoin "\n"
-    [ join [indexStr, " = ", (int2string i)]
-    , join [ valueStr, " = ",
-             use MExprPrettyPrint in
-             expr2str (get table i)
-           ]
-    , join [holeNameStr, " = \"", (nameInfoGetStr holeInfo), "\""]
-    , join [holeInfoStr, " = \"", (info2strEsc holeInfo.1), "\""]
-    , join [funNameStr, " = \"", (nameInfoGetStr funInfo), "\""]
-    , join [funInfoStr, " = \"", (info2strEsc funInfo.1), "\""]
-    , join [pathNameStr, " = ", listOfStrings (map nameInfoGetStr path)]
-    , join [pathInfoStr, " = ", listOfStrings (map (lam x : NameInfo. info2strEsc x.1) path)]
-    ]
-  in
-  let taggedEntries =
-    mapFoldWithKey
-      (lam acc : [String]. lam h : NameInfo. lam pathMap : Map [NameInfo] Int.
-         concat acc (map (lam b : ([NameInfo], Int). (b.1, entry2str h b.0 b.1)) (mapBindings pathMap)))
-      [] hole2idx
-  in
-  let sortedTagged =
-    sort (lam e1 : (Int, String). lam e2 : (Int, String). subi e1.0 e2.0)
-      taggedEntries
-  in
-  let entries = map (lam e : (Int, String). e.1) sortedTagged in
-  concat "[[hole]]\n" (strJoin (join ["\n", "[[hole]]", "\n"]) entries)
 
 let tuneDumpTable =
   lam file : String.
@@ -83,7 +37,7 @@ let tuneDumpTable =
     , "\n"
     , make _sepLength '='
     , "\n"
-    , match env with Some env then _tuneInfo env table else ""
+    , match env with Some env then tuneFileDump env table (CSV ()) else ""
     , "\n"
     ] in
     writeFile destinationFile str
