@@ -72,17 +72,7 @@ let distCmp = lam p1. lam p2. lam limit.
   let d = dist 0 p1 p2 0 in
   let t2 = wallTimeMs () in
   modref timeDistCmp (addf (deref timeDistCmp) (subf t2 t1));
-  -- utest
-  --   let dSq = distSq ops p1 p2 in
-  --   match d with None () then
-  --     leqi limit dSq
-  --   else match d with Some _ then
-  --     gti limit dSq
-  --   else never
-  -- with true in
   d
-
-
 
 utest distCmp [0] [0] 1 with Some 0
 utest distCmp [0] [0] 0 with None ()
