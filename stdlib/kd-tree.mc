@@ -37,6 +37,7 @@ type Nearest v = {nearest : Point v, dSq : v, min : Point v, max : Point v}
 
 type NumOps v =
 { zero : v
+, eq : v -> v -> Bool
 , add : v -> v -> v
 , sub : v -> v -> v
 , cmp : v -> v -> Int
@@ -46,21 +47,36 @@ type NumOps v =
 
 let intOps : NumOps Int =
 { zero = 0
+, eq = eqi
 , add = addi
 , sub = subi
 , cmp = subi
 , mul = muli
 , sqrtFun = lam a. floorfi (sqrtf (int2float a))
---, sqrtFun = sqrti
 }
+
+let timeDistSq = ref 0.0
 
 -- Compute the squared distances between 'p1' and 'p2'
 let distSq = lam ops : NumOps v. lam p1. lam p2.
-  let dists = zipWith (lam x. lam y.
-    let diff = ops.sub x y in
-    ops.mul diff diff
-  ) p1 p2 in
-  foldl ops.add ops.zero dists
+  let t1 = wallTimeMs () in
+  --print "distance to "; iter dprint p2; print "\n";
+  -- let dists = zipWith (lam x. lam y.
+  --   let diff = ops.sub x y in
+  --   ops.mul diff diff
+  -- ) p1 p2 in
+  --let res = foldl ops.add ops.zero dists in
+  let n = length p1 in
+  recursive let dist = lam acc. lam p1. lam p2. lam i.
+    if eqi i n then acc
+    else
+      let diff = ops.sub (get p1 i) (get p2 i) in
+      dist (ops.add acc (ops.mul diff diff)) p1 p2 (addi i 1)
+  in
+  let d = dist 0 p1 p2 0 in
+  let t2 = wallTimeMs () in
+  modref timeDistSq (addf (deref timeDistSq) (subf t2 t1));
+  d
 
 utest distSq intOps [0] [0] with 0
 utest distSq intOps [0,1] [1,2] with 2
@@ -68,7 +84,6 @@ utest distSq intOps [0,1] [1,2] with 2
 let setNearest = lam ops : NumOps. lam p. lam nearest. lam dSq.
   match ops with { zero = zero, add = add, sub = sub, mul = mul, sqrtFun = sqrtFun }
   then
-    let ps = zipWith (lam p. lam q. (p,q)) p nearest in
     let d = sqrtFun dSq in
     let min = map (lam x. sub x d) p in
     let max = map (add d) p in
@@ -94,10 +109,7 @@ let kdTreeNearest =
       let axis = modi depth k in
       match tree with Leaf p then
         match curBest with None () then
-          -- print "point: "; iter dprintLn point;
-          -- print "nearest: "; iter dprintLn p;
           let res = setNearest ops point p (distSq ops point p) in
-          -- printLn "After nearest";
           res
         else match curBest with Some best then
           let best : Nearest = best in
@@ -112,6 +124,7 @@ let kdTreeNearest =
           let v = get point axis in
           if lti (ops.cmp v split) 0 then
             let best = work curBest (addi depth 1) left in
+            if eqi best.dSq 0 then best else
             let maxSplit = get best.max axis in
             if leqi (ops.cmp split maxSplit) 0 then
               -- There might be a closer point in right sub-tree
@@ -119,6 +132,7 @@ let kdTreeNearest =
             else best
           else
             let best = work curBest (addi depth 1) right in
+            if eqi best.dSq 0 then best else
             let minSplit = get best.min axis in
             if gti (ops.cmp split minSplit) 0 then
               -- There might be a closer point in left sub-tree
@@ -127,12 +141,14 @@ let kdTreeNearest =
         -- We have an estimate already
         else match curBest with Some best then
           let best : Nearest = best in
+          if eqi best.dSq 0 then best else
           let minSplit = get best.min axis in
           let best =
             if gti (ops.cmp split minSplit) 0 then
               work (Some best) (addi depth 1) left
             else best
           in
+          if eqi best.dSq 0 then best else
           let maxSplit = get best.max axis in
           if leqi (ops.cmp split maxSplit) 0 then
             work (Some best) (addi depth 1) right
