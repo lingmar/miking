@@ -41,10 +41,11 @@ let tuneFileName = lam file.
   else file
 in concat withoutExtension tuneFileExtension
 
-let vertexPath : Int -> Env -> [NameInfo] = lam i. lam env : CallCtxEnv.
-  match env with {verbosePath = verbosePath} then
+let vertexPath : NameInfo -> Int -> Env -> [NameInfo] = lam h : NameInfo. lam i : Int. lam env : CallCtxEnv.
+  match env with {verbosePath = verbosePath, hole2fun = hole2fun} then
     let edgePath = mapFindWithExn i (deref verbosePath) in
-    match edgePath with [] then []
+    match edgePath with [] then
+      [mapFindWithExn h (deref hole2fun)]
     else
       let lastEdge : (NameInfo, NameInfo, NameInfo) = last edgePath in
       let destination = lastEdge.1 in
@@ -60,7 +61,7 @@ let tuneFileDump = lam env : CallCtxEnv. lam table : LookupTable. lam format : T
 
   let entry2str = lam holeInfo : NameInfo. lam path : [NameInfo]. lam i : Int.
     let funInfo : NameInfo = mapFindWithExn holeInfo hole2fun in
-    let path = vertexPath i env in
+    let path = vertexPath holeInfo i env in
     let value = get table i in
     let tyAndVal : (Int, String) = use MExprAst in
       match value with TmConst {val = CBool {val = b}} then (boolTypeValue, if b then "true" else "false")

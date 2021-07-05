@@ -28,6 +28,11 @@ let getTuneFile = lam options : Options. lam file. lam tuneFiles.
     tuneFile
   else error "No tune file provided"
 
+let transferTune = lam options : Options. lam table. lam file. lam tuneFiles. lam env.
+  if options.transferTune then
+    transferTune (getTuneFile options file tuneFiles) env
+  else table
+
 let tune = lam files. lam options : Options. lam args.
 
   match partition (isSuffix eqc ".tune") files with (tuneFiles, files) then
@@ -58,19 +63,9 @@ let tune = lam files. lam options : Options. lam args.
           else table
         in
 
-        -- If option --try-use-tuned is given, then try to match old tune file to
+        -- If option --transfer-tune is given, then try to match old tune file to
         -- new program
-        -- let table =
-        --   if options.tryUseTuned then
-        --     match matchHoles (getTuneFile options file tuneFiles) env
-        --     with (table, matchStr)
-        --     then
-        --       printLn matchStr;
-        --       table
-        --     else never
-        --   else table
-        -- in
-        transferTune (getTuneFile options file tuneFiles) env;
+        let table = transferTune options table file tuneFiles env in
 
         -- Compile the program
         let binary = ocamlCompileAst options file ast in

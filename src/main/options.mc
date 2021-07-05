@@ -13,7 +13,7 @@ type Options = {
   useTuned : Bool,
   seqTransform : Bool,
   help : Bool,
-  tryUseTuned : Bool,
+  transferTune : Bool,
   useDefaultTuneFile : Bool
 }
 
@@ -28,7 +28,7 @@ let options = {
   useTuned = false,
   seqTransform = false,
   help = false,
-  tryUseTuned = false,
+  transferTune = false,
   useDefaultTuneFile = false
 }
 
@@ -43,7 +43,7 @@ let optionsMap = [
 ("--use-tuned", lam o : Options. {o with useTuned = true}),
 ("--enable-seq-transform", lam o : Options. {o with seqTransform = true}),
 ("--help", lam o : Options. {o with help = true}),
-("--try-use-tuned", lam o : Options. {o with tryUseTuned = true}),
+("--transfer-tune", lam o : Options. {o with transferTune = true}),
 ("--default-tune-file", lam o : Options. {o with useDefaultTuneFile = true})
 ]
 

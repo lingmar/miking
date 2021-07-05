@@ -426,7 +426,7 @@ let _adjustRange = lam env : CallCtxEnv. lam i : Int. lam expr : Expr.
     let idx2hole = deref idx2hole in
     match get idx2hole i with TmHole { inner = innerHole } then
       use HoleIntRangeAst in
-      match innerHole with IntRange {min = min, max = max} then
+      match innerHole with HIntRange {min = min, max = max} then
         let v = _parseInt expr in
         if lti v min then int_ min
         else if gti v max then int_ max

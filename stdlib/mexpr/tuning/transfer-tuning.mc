@@ -1,6 +1,7 @@
 include "tune-file.mc"
 include "kd-tree.mc"
 include "mexpr/ast-builder.mc"
+include "mexpr/eq.mc"
 
 type HoleInfo =
 { varName : String
@@ -12,6 +13,18 @@ type HoleInfo =
 , pathName : [String]
 , pathInfo : [Info]
 }
+
+let holeInfo2str = lam h : HoleInfo.
+  strJoin ","
+  [ h.varName
+  , int2string h.ty
+  , int2string h.value
+  , info2str h.varInfo
+  , h.funName
+  , info2str h.funInfo
+  , strJoin ">" h.pathName
+  , strJoin ">" (map info2str h.pathInfo)
+  ]
 
 let _defaultLineNo = 0
 let _defaultFunName = ""
@@ -139,7 +152,7 @@ let env2holeInfo : CallCtxEnv -> [HoleInfo] = lam env : CallCtxEnv.
       concat acc (
         foldl (lam acc : [HoleInfo]. lam path : [NameInfo].
           let i = mapFindWithExn path bind.1 in
-          let pathVerbose = vertexPath i env in
+          let pathVerbose = vertexPath bind.0 i env in
           match unzip pathVerbose with (funNames, funInfos) then
             let funNames : [String] = map nameGetStr funNames in
             snoc acc
@@ -158,10 +171,44 @@ let env2holeInfo : CallCtxEnv -> [HoleInfo] = lam env : CallCtxEnv.
     ) [] (mapBindings hole2idx)
   else never
 
+let _inRange = lam min. lam max. lam v.
+  use MExprAst in
+  match v with TmConst {val = CInt {val = i}} then
+    if gti i max then int_ max
+    else if lti i min then int_ min
+    else v
+  else error "impossible"
+
+let transferValues = lam env : CallCtxEnv. lam matched : Map Int Expr.
+  match env with {idx2hole = idx2hole} then
+    let idx2hole = deref idx2hole in
+    let n = length idx2hole in
+    recursive let buildTable = lam acc. lam i.
+      if eqi i n then acc
+      else
+        let val =
+          use MExprHoles in
+          match mapLookup i matched with Some expr then
+            match get idx2hole i
+            with TmHole {inner = HIntRange {min = min, max = max}} then
+              _inRange min max expr
+            else expr
+          else default (get idx2hole i)
+        in buildTable (snoc acc val) (addi i 1)
+    in
+    buildTable [] 0
+  else never
+
 let transferTune = lam file. lam env.
+  printLn "in transferTune";
+
   -- Parse all holes into common info data structure
   let old = tuneFile2holeInfo file in
+  printLn "tune file parsed";
   let new = env2holeInfo env in
+  printLn "env parsed";
+
+  printLn "after parse";
 
   -- Partition by types
   let oldBoolInt = partition (lam x : HoleInfo. eqi x.ty boolTypeValue) old in
@@ -171,6 +218,8 @@ let transferTune = lam file. lam env.
   let oldInt = oldBoolInt.1 in
   let newBool = newBoolInt.0 in
   let newInt = newBoolInt.1 in
+
+  printLn "after partition";
 
   -- Dimensions of the problem
   let pathLen = 3 in
@@ -195,56 +244,57 @@ let transferTune = lam file. lam env.
 
   printLn "finished data points";
 
-  -- Create kd-trees from old points and find nearest neighbours
-  let valsBool =
-    match oldPointsBool with [] then
-      mapEmpty subi
-    else
-      let tree = kdTreeCreate subi dim oldPointsBool in
-      printLn "finished creating bool tree";
-      let nearest = map (kdTreeNearest dim tree) newPointsBool in
-      printLn "finished searching bool tree";
-      foldl (lam acc. lam pair : (HoleInfo, Nearest).
-        printLn "here";
-        let h = pair.0 in
-        let nearest = pair.1 in
-        match nearest with {nearest = nearest} then
-          let iOld = head nearest in
-          let oldHole : HoleInfo = get oldBool iOld in
-          let expr = switch oldHole.value
-            case 0 then false_
-            case 1 then true_
-            end
-          in
-          let iNew = h.value in
-          mapInsert iNew expr acc
-        else never
-      ) (mapEmpty subi) (zip newBool nearest)
+  -- Create kd-trees from old points and find nearest neighbors
+  let valMap =
+    lam acc : Map Int Expr.
+    lam oldPoints. lam newPoints.
+    lam oldInfos : [HoleInfo].
+    lam newInfos : [HoleInfo].
+    lam convert : Int -> Expr.
+      match oldPoints with [] then
+        mapEmpty subi
+      else
+        let tree = kdTreeCreate subi dim oldPoints in
+        let nearest = map (kdTreeNearest dim tree) newPoints in
+        foldl (lam acc. lam pair : (HoleInfo, Nearest).
+          let h = pair.0 in
+          let nearest = pair.1 in
+          match nearest with {nearest = nearest} then
+            let iOld = head nearest in
+            let oldHole : HoleInfo = get oldInfos iOld in
+            print "new hole "; printLn (holeInfo2str h);
+            print "old hole "; printLn (holeInfo2str oldHole);
+            let expr = convert oldHole.value in
+            let iNew = h.value in
+            mapInsert iNew expr acc
+          else never
+        ) acc (zip newInfos nearest)
+  in
+  let valsBool = valMap (mapEmpty subi) oldPointsBool newPointsBool
+    oldBool newBool (lam v. switch v case 0 then false_ case 1 then true_ end)
+  in
+  let valsInt = valMap valsBool oldPointsInt newPointsInt
+    oldInt newInt int_
   in
 
-  printLn "finished bools";
+  let vals = valsInt in
 
-  let valsInt =
-    match oldPointsInt with [] then
-      mapEmpty subi
-    else
-      let tree = kdTreeNearest subi dim oldPointsInt in
-      let nearest = map (kdTreeNearest dim tree) newPointsInt in
-      foldl (lam acc. lam pair : (HoleInfo, Nearest).
-        let h = pair.0 in
-        let nearest = pair.1 in
-        match nearest with {nearest = nearest} then
-          let iOld = head nearest in
-          let oldHole : HoleInfo = get oldInt iOld in
-          let expr = int_ (oldHole.value) in
-          let iNew = h.value in
-          mapInsert iNew expr acc
-        else never
-      ) (mapEmpty subi) (zip newInt nearest)
-  in
+  printLn "finished transfer";
 
-  printLn "finished transfer"
+  let res = transferValues env vals in
+
+  printLn "finished table";
+
+  res
 
 mexpr
 
-tuneFile2holeInfo "test/examples/tuning/test.tune"
+use MExprEq in
+
+tuneFile2holeInfo "test/examples/tuning/test.tune";
+
+utest _inRange 1 10 (int_ 3) with int_ 3 using eqExpr in
+utest _inRange 1 10 (int_ 11) with int_ 10 using eqExpr in
+utest _inRange 1 10 (int_ 0) with int_ 1 using eqExpr in
+
+()

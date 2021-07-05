@@ -317,18 +317,18 @@ end
 -- An integer decision point (range of integers).
 lang HoleIntRangeAst = IntAst + HoleAst
   syn Hole =
-  | IntRange {min : Int,
+  | HIntRange {min : Int,
               max : Int}
 
   sem isIntRange =
-  | IntRange r -> Some (r.min, r.max)
+  | HIntRange r -> Some (r.min, r.max)
 
   sem hsample =
-  | IntRange {min = min, max = max} ->
+  | HIntRange {min = min, max = max} ->
     int_ (randIntU min (addi max 1))
 
   sem hnext (last : Option Expr) (stepSize : Int) =
-  | IntRange {min = min, max = max} ->
+  | HIntRange {min = min, max = max} ->
     match last with None () then Some (int_ min)
     else match last with Some (TmConst {val = CInt {val = i}}) then
       if eqi i max then
@@ -348,7 +348,7 @@ lang HoleIntRangeAst = IntAst + HoleAst
       let validate = lam expr.
         match expr
         with TmHole {default = TmConst {val = CInt {val = i}},
-                     inner = IntRange {min = min, max = max}}
+                     inner = HIntRange {min = min, max = max}}
         then
           if and (leqi min i) (geqi max i) then expr
           else infoErrorExit info "Default value is not within range"
@@ -359,14 +359,14 @@ lang HoleIntRangeAst = IntAst + HoleAst
            let min = _expectConstInt info "min" (_lookupExit info "min" m) in
            let max = _expectConstInt info "max" (_lookupExit info "max" m) in
            if leqi min max then
-             IntRange {min = min, max = max}
+             HIntRange {min = min, max = max}
            else infoErrorExit info
              (join ["Empty domain: ", int2string min, "..", int2string max]))
         validate (get lst 0))
 
   sem pprintHole =
-  | IntRange {min = min, max = max} ->
-    ("IntRange", [("min", int2string min), ("max", int2string max)])
+  | HIntRange {min = min, max = max} ->
+    ("HIntRange", [("min", int2string min), ("max", int2string max)])
 end
 
 let holeBool_ = use HoleBoolAst in
@@ -383,7 +383,7 @@ let holeIntRange_ = use HoleIntRangeAst in
          , depth = depth
          , ty = tyint_
          , info = NoInfo ()
-         , inner = IntRange {min = min, max = max}}
+         , inner = HIntRange {min = min, max = max}}
 
 
 ------------------------------
