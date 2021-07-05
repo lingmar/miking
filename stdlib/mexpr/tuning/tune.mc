@@ -33,7 +33,9 @@ let tuneDumpTable =
   lam table : LookupTable.
     let destinationFile = tuneFileName file in
     let str = join
-    [ _tuneTable2str table
+    [ int2string (length table)
+    , "\n"
+    , _tuneTable2str table
     , "\n"
     , make _sepLength '='
     , "\n"

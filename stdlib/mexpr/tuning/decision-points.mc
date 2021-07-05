@@ -1039,15 +1039,6 @@ lang FlattenHoles = Ast2CallGraph + HoleAst + IntAst
       in reverse (strTrim_init (reverse (strTrim_init s)))
     in
 
-    let strIndex = lam c. lam s.
-      let n = length s in
-      recursive let work = lam i.
-        if geqi i n then error \"strIndex\"
-        else if eqc c (get s i) then i
-        else work (addi i 1)
-      in work 0
-    in
-
     let string2int = lam s.
       recursive
       let string2int_rechelper = lam s.
@@ -1081,7 +1072,6 @@ lang FlattenHoles = Ast2CallGraph + HoleAst + IntAst
     let string2intName = getName "string2int" impl in
     let strSplitName = getName "strSplit" impl in
     let strTrimName = getName "strTrim" impl in
-    let strIndexName = getName "strIndex" impl in
 
     let convertFuns = map (lam h.
       match h with TmHole {ty = TyBool _} then string2boolName
@@ -1097,14 +1087,14 @@ lang FlattenHoles = Ast2CallGraph + HoleAst + IntAst
     let strVals = nameSym "strVals" in
     let i = nameSym "i" in
     let p = nameSym "p" in
+    let nbr = nameSym "n" in
     bindall_
     [ impl
     , nulet_ fileContent (readFile_ (str_ tuneFile))
-    , nulet_ i (appf2_ (nvar_ strIndexName) (char_ '=') (nvar_ fileContent))
-    , nulet_ fileContent
-       (ntupleproj_ p 0 (splitat_ (nvar_ fileContent) (nvar_ i)))
     , nulet_ strVals (appf2_ (nvar_ strSplitName) (str_ "\n")
         (app_ (nvar_ strTrimName) (nvar_ fileContent)))
+    , nulet_ nbr (app_ (nvar_ string2intName) (head_ (nvar_ strVals)))
+    , nulet_ strVals (subsequence_ (nvar_ strVals) (int_ 1) (nvar_ nbr))
     , let x = nameSym "x" in
       nulet_ strVals (map_ (nulam_ x
         (get_ (appf2_ (nvar_ strSplitName) (str_ ": ") (nvar_ x)) (int_ 1)))
@@ -1328,7 +1318,7 @@ map doCallGraphTests cgTests;
 -- Decision points tests --
 ---------------------------
 
-let debug = false in
+let debug = true in
 
 let debugPrint = lam ast. lam pub.
   if debug then
