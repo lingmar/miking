@@ -52,7 +52,9 @@ lang LocalSearchBase
   -- : (Assignment -> Cost) -> Assignment -> SearchState
   sem initSearchState (cost : Assignment -> Cost) (cmp : Cost -> Cost -> Int) =
   | a ->
-    let sol = {assignment = a, cost = cost a} in
+    -- NOTE(Linnea, 2021-07-05): Computes the initial cost twice, throws away
+    -- first result, to avoid cold cache
+    let sol = {assignment = a, cost = cost a; cost a; cost a} in
     {cur = sol, inc = sol, iter = 0, stuck = false, cost = cost, cmp = cmp}
 
   -- The neighbouring assignments from a search state.

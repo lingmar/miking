@@ -291,7 +291,7 @@ mexpr
 
 use MExprEq in
 
-tuneFile2holeInfo "test/examples/tuning/test.tune";
+-- tuneFile2holeInfo "test/examples/tuning/test.tune";
 
 utest _inRange 1 10 (int_ 3) with int_ 3 using eqExpr in
 utest _inRange 1 10 (int_ 11) with int_ 10 using eqExpr in

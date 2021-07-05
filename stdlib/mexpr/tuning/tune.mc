@@ -5,7 +5,6 @@ include "map.mc"
 include "decision-points.mc"
 include "tune-options.mc"
 include "common.mc"
-include "warm-start.mc"
 include "tune-file.mc"
 
 -- Performs tuning of a flattened program with decision points.
@@ -145,7 +144,7 @@ lang TuneLocalSearch = TuneBase + LocalSearchBase
     -- Set up initial search state
     let startState =
       initSearchState costF cmpF
-        (Table {table = table
+        (Table { table = table
                , holes = holes
                , options = options})
     in
@@ -162,6 +161,7 @@ lang TuneLocalSearch = TuneBase + LocalSearchBase
       lam stop.
       lam searchState.
       lam metaState.
+      lam iter.
         (if options.debug then
           printLn "-----------------------";
           debugSearch searchState;
@@ -174,7 +174,7 @@ lang TuneLocalSearch = TuneBase + LocalSearchBase
         else
           match minimize searchState metaState with (searchState, metaState)
           then
-            search stop searchState metaState
+            search stop searchState metaState (addi iter 1)
           else never
     in
 
@@ -182,13 +182,13 @@ lang TuneLocalSearch = TuneBase + LocalSearchBase
     (if options.debug then
        fprintLn "----------------------- WARMUP RUNS -----------------------"
        else ());
-    search warmupStop startState (initMeta startState);
+    search warmupStop startState (initMeta startState) 0;
     (if options.debug then
        fprintLn "-----------------------------------------------------------"
        else ());
 
     -- Do the search!
-    match search stop startState (initMeta startState)
+    match search stop startState (initMeta startState) 0
     with (searchState, _) then
       let searchState : SearchState = searchState in
       match searchState with {inc = {assignment = Table {table = table}}}
@@ -196,10 +196,6 @@ lang TuneLocalSearch = TuneBase + LocalSearchBase
       else never
     else never
 end
-
--- Search strategies:
--- exhaustive search
--- tabu that doesn't get stuck all the time
 
 -- Explore the search space exhaustively, i.e. try all combinations of all
 -- decision points. The decision points are explored from left to right.

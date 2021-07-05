@@ -1318,7 +1318,7 @@ map doCallGraphTests cgTests;
 -- Decision points tests --
 ---------------------------
 
-let debug = true in
+let debug = false in
 
 let debugPrint = lam ast. lam pub.
   if debug then
@@ -1376,7 +1376,7 @@ let ast = bindall_ [  nulet_ funA (ulam_ ""
                                (nvar_ callCB)))
                    ]
 in
-debugPrint ast [funB, funC];
+debugPrint ast [(funB, NoInfo ()), (funC, NoInfo ())];
 let ast = anf ast in
 
 match flatten [(funB, NoInfo ()), (funC, NoInfo ())] ast with
@@ -1386,7 +1386,8 @@ then
   let dumpTable = lam table : LookupTable.
     use MExprPrettyPrint in
     let rows = mapi (lam i. lam expr.
-    join [int2string i, ": ", expr2str expr]) table in
+      join [int2string i, ": ", expr2str expr]) table in
+    let rows = cons (int2string (length table)) rows in
     let str = strJoin "\n" (concat rows ["="]) in
     writeFile tempFile str
   in
