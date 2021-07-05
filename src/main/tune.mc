@@ -7,7 +7,8 @@ include "mexpr/boot-parser.mc"
 include "mexpr/tuning/decision-points.mc"
 include "mexpr/tuning/tune.mc"
 include "mexpr/seq-transformer.mc"
-include "mexpr/tuning/warm-start.mc"
+-- include "mexpr/tuning/warm-start.mc"
+include "mexpr/tuning/transfer-tuning.mc"
 include "ocaml/sys.mc"
 
 lang MCoreTune =
@@ -59,16 +60,17 @@ let tune = lam files. lam options : Options. lam args.
 
         -- If option --try-use-tuned is given, then try to match old tune file to
         -- new program
-        let table =
-          if options.tryUseTuned then
-            match matchHoles (getTuneFile options file tuneFiles) env
-            with (table, matchStr)
-            then
-              printLn matchStr;
-              table
-            else never
-          else table
-        in
+        -- let table =
+        --   if options.tryUseTuned then
+        --     match matchHoles (getTuneFile options file tuneFiles) env
+        --     with (table, matchStr)
+        --     then
+        --       printLn matchStr;
+        --       table
+        --     else never
+        --   else table
+        -- in
+        transferTune (getTuneFile options file tuneFiles) env;
 
         -- Compile the program
         let binary = ocamlCompileAst options file ast in

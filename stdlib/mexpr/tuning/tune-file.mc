@@ -1,5 +1,6 @@
 
 include "decision-points.mc"
+include "string.mc"
 
 type TuneFileFormat
 con CSV : () -> TuneFileFormat
@@ -7,6 +8,29 @@ con TOML : () -> TuneFileFormat
 
 let _listOfStrings = lam strs.
   join [strJoin ">" strs]
+
+let indexStr = "index"
+let typeStr = "type"
+let valueStr = "value"
+let holeNameStr = "hole_name"
+let holeInfoStr = "hole_info"
+let funNameStr = "function_name"
+let funInfoStr = "function_info"
+let pathNameStr = "call_path_functions"
+let pathInfoStr = "call_path_infos"
+
+let indexIdx = 0
+let typeIdx = 1
+let valueIdx = 2
+let holeNameIdx = 3
+let holeInfoIdx = 4
+let funNameIdx = 5
+let funInfoIdx = 6
+let pathNameIdx = 7
+let pathInfoIdx = 8
+
+let boolTypeValue = 0
+let intTypeValue = 1
 
 let tuneFileExtension = ".tune"
 
@@ -17,6 +41,17 @@ let tuneFileName = lam file.
   else file
 in concat withoutExtension tuneFileExtension
 
+let vertexPath : Int -> Env -> [NameInfo] = lam i. lam env : CallCtxEnv.
+  match env with {verbosePath = verbosePath} then
+    let edgePath = mapFindWithExn i (deref verbosePath) in
+    match edgePath with [] then []
+    else
+      let lastEdge : (NameInfo, NameInfo, NameInfo) = last edgePath in
+      let destination = lastEdge.1 in
+      snoc (map (lam e : (NameInfo, NameInfo, NameInfo). e.0) edgePath)
+      destination
+  else never
+
 let tuneFileDump = lam env : CallCtxEnv. lam table : LookupTable. lam format : TuneFileFormat.
   let hole2idx = deref env.hole2idx in
   let hole2fun = deref env.hole2fun in
@@ -26,9 +61,16 @@ let tuneFileDump = lam env : CallCtxEnv. lam table : LookupTable. lam format : T
   let entry2str = lam holeInfo : NameInfo. lam path : [NameInfo]. lam i : Int.
     let funInfo : NameInfo = mapFindWithExn holeInfo hole2fun in
     let path = vertexPath i env in
+    let value = get table i in
+    let tyAndVal : (Int, String) = use MExprAst in
+      match value with TmConst {val = CBool {val = b}} then (boolTypeValue, if b then "true" else "false")
+      else match value with TmConst {val = CInt {val = i}} then (intTypeValue, int2string i)
+      else error "unknown value type"
+    in
     let values =
     [ int2string i
-    , use MExprPrettyPrint in expr2str (get table i)
+    , int2string tyAndVal.0
+    , tyAndVal.1
     , nameInfoGetStr holeInfo
     , info2str holeInfo.1
     , nameInfoGetStr funInfo
@@ -41,6 +83,7 @@ let tuneFileDump = lam env : CallCtxEnv. lam table : LookupTable. lam format : T
     else match format with TOML _ then
       strJoin "\n" (zipWith (lam x. lam y. join [x, " = ", y])
         [ indexStr
+        , typeStr
         , valueStr
         , holeNameStr
         , holeInfoStr
