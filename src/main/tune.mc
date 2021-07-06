@@ -50,11 +50,16 @@ let tune = lam files. lam options : Options. lam args.
       let ast = symbolize ast in
       let ast = normalizeTerm ast in
 
+      let t1 = wallTimeMs () in
       -- Flatten the decision points
       match flatten [] ast with
         { ast = ast, table = table, tempFile = tempFile, cleanup = cleanup,
           env = env }
       then
+        let t2 = wallTimeMs () in
+
+        print "flattening time = "; dprint (divf (subf t2 t1) 1000.);
+
         -- If option --use-tuned is given, then use given tune file as defaults
         let table =
           if options.useTuned then
@@ -64,7 +69,10 @@ let tune = lam files. lam options : Options. lam args.
 
         -- If option --transfer-tune is given, then try to match old tune file to
         -- new program
+        let t1 = wallTimeMs () in
         let table = transferTune options table file tuneFiles env in
+        let t2 = wallTimeMs () in
+        print "transfer tuning time = "; dprint (divf (subf t2 t1) 1000.);
 
         -- Compile the program
         let binary = ocamlCompileAst options file ast in
@@ -79,6 +87,12 @@ let tune = lam files. lam options : Options. lam args.
 
         -- Write the best found values to filename.tune
         tuneDumpTable file (Some env) result;
+
+        -- If option --compile is given, then compile the program using the
+        -- tuned values
+        (if options.compileAfterTune then
+           compile files {options with useTuned = true} args
+         else ());
 
         -- Clean up temporary files used during tuning
         cleanup ()

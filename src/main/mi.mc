@@ -36,8 +36,10 @@ Options:
   --disable-optimizations Disables optimizations to decrease compilation time
   --use-tuned             Use values from tuning during compilation
   --enable-seq-transform  Transform sequence literals into using decision points
-  --try-use-tuned         Try to match holes from previous tuning during
+  ---transfer-tune        Try to match holes from previous tuning during
                           compilation or tuning
+  --compile               If the tune command is used, this compiles the program
+                          using the tuned values after tuning.
   --default-tune-file     Use default tune file (<filename>.tune)
   -- <args>               If the run or eval commands are used, then the texts
                           following -- are arguments to the executed program

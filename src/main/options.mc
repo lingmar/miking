@@ -14,7 +14,8 @@ type Options = {
   seqTransform : Bool,
   help : Bool,
   transferTune : Bool,
-  useDefaultTuneFile : Bool
+  useDefaultTuneFile : Bool,
+  compileAfterTune : Bool
 }
 
 -- Option structure
@@ -29,7 +30,8 @@ let options = {
   seqTransform = false,
   help = false,
   transferTune = false,
-  useDefaultTuneFile = false
+  useDefaultTuneFile = false,
+  compileAfterTune = false
 }
 
 -- Option map, maps strings to structure updates
@@ -44,7 +46,8 @@ let optionsMap = [
 ("--enable-seq-transform", lam o : Options. {o with seqTransform = true}),
 ("--help", lam o : Options. {o with help = true}),
 ("--transfer-tune", lam o : Options. {o with transferTune = true}),
-("--default-tune-file", lam o : Options. {o with useDefaultTuneFile = true})
+("--default-tune-file", lam o : Options. {o with useDefaultTuneFile = true}),
+("--compile", lam o : Options. {o with compileAfterTune = true})
 ]
 
 let mapStringLookup = assocLookup {eq=eqString}

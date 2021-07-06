@@ -12,7 +12,7 @@ include "utesttrans.mc"
 
 let seqCount = ref 0
 
-let limit = 1
+let limit = 100000
 
 -- TODO: don't recurse in utest?
 lang SeqTransformer = SeqAst + VarAst + AppAst + UnknownTypeAst
@@ -25,7 +25,7 @@ lang SeqTransformer = SeqAst + VarAst + AppAst + UnknownTypeAst
 
   sem _seqTransform (create : Name) =
   | TmSeq ({tms = tms, info = info} & t) ->
-    if (leqi (deref seqCount) limit) then
+    if leqi (deref seqCount) limit then
       modref seqCount (addi 1 (deref seqCount));
     TmApp
       { lhs = TmApp { lhs = TmVar {ident = create, ty = tyunknown_, info = info}
