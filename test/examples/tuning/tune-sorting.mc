@@ -5,7 +5,7 @@ include "string.mc"
 
 let init = lam n. lam f.
   -- 0 = FingerTree, 1 = List, 2 = Rope
-  let repr = holeIntRange {min = 0, max = 2, depth = 1, default = 0} in
+  let repr = hole (IntRange {min = 0, max = 2, depth = 1, default = 0}) in
 
   match repr with 0 then
     createFingerTree n f

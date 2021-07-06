@@ -1,10 +1,12 @@
 
-let holeBool
-  : {default : Bool, depth : Int} -> Bool
-  = lam r.
-    r.default
+-- Hack to be able to bootstrap 1st round with holes
 
-let holeIntRange
-  : {default : Bool, depth : Int, min : Int, max : Int} -> Bool
-  = lam r.
-    r.default
+type Hole
+con Boolean : {default : Bool, depth : Int} -> Hole
+con IntRange : {default : Int, min : Int, max : Int, depth : Int} -> Hole
+
+let hole : Hole -> a = lam h.
+  switch h
+  case Boolean r then r.default
+  case IntRange r then r.default
+  end

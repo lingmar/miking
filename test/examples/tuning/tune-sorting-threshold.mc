@@ -5,9 +5,9 @@ include "string.mc"
 
 let init = lam n. lam f.
   -- 0 = FingerTree, 1 = List, 2 = Rope
-  let threshold = holeIntRange {min = 0, max = 100000, depth = 0, default = 1} in
-  let reprLow = holeIntRange {min = 0, max = 2, depth = 1, default = 0} in
-  let reprHigh = holeIntRange {min = 0, max = 2, depth = 1, default = 0} in
+  let threshold = hole (IntRange {min = 0, max = 100000, depth = 0, default = 1}) in
+  let reprLow = hole (IntRange {min = 0, max = 2, depth = 1, default = 0}) in
+  let reprHigh = hole (IntRange {min = 0, max = 2, depth = 1, default = 0}) in
 
   if geqi n threshold then
     match reprHigh with 0 then

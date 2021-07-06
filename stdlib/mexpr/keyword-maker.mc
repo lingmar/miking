@@ -60,10 +60,11 @@ lang KeywordMakerData = KeywordMakerBase + DataAst
      else TmConApp r
   | TmConDef r ->
      let ident = nameGetStr r.ident in
-     match matchKeywordString r.info ident with Some _ then
-       infoErrorExit r.info (join ["Keyword '", ident,
-       "' cannot be used in a constructor definition."])
-     else TmConDef {r with inexpr = makeKeywords [] r.inexpr}
+     -- match matchKeywordString r.info ident with Some _ then
+     --   infoErrorExit r.info (join ["Keyword '", ident,
+     --   "' cannot be used in a constructor definition."])
+     -- else
+     TmConDef {r with inexpr = makeKeywords [] r.inexpr}
 end
 
 -- Includes a check that a keyword cannot be used as a binding variable in a lambda
