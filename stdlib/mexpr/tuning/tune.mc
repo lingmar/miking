@@ -48,8 +48,8 @@ let tuneReadTable = lam file : String.
   let fileContent = readFile file in
   match strIndex '=' fileContent with Some i then
     let fileContent = (splitAt fileContent i).0 in
-    let fileContent = tail fileContent in
     let strVals = strSplit _delim (strTrim fileContent) in
+    let strVals = tail strVals in
     let strVals = map (lam x. get (strSplit ": " x) 1) strVals in
     map (parseMExprString []) strVals
   else error "Tune file incorrectly formatted (expected a '=')"
