@@ -67,6 +67,9 @@ test-boot-compile: build/mi
 test-compile: build/mi
 	@$(MAKE) -s -f test-compile.mk all
 
+test-compile-temp:
+	@$(MAKE) -s -f test-compile-temp.mk all
+
 test-sundials: build/mi
 	@$(MAKE) -s -f test-sundials.mk all
 
