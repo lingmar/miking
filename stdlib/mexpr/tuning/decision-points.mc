@@ -14,6 +14,7 @@ include "string.mc"
 include "eq-paths.mc"
 include "name.mc"
 include "common.mc"
+include "tree.mc"
 
 -- This file contains implementations related to decision points.
 
@@ -651,50 +652,32 @@ let _lookupCallCtx
   : (Int -> Expr) -> NameInfo -> Name
   -> CallCtxEnv -> [[NameInfo]] -> Expr =
   lam lookup. lam holeId. lam incVarName. lam env : CallCtxEnv. lam paths.
-    match env with { lbl2inc = lbl2inc } then
-      -- TODO(Linnea, 2021-04-21): Represent paths as trees, then this
-      -- partition becomes trivial
-      let partitionPaths : [[NameInfo]] -> ([NameInfo], [[[NameInfo]]]) =
-        lam paths.
-          let startVals = foldl (lam acc. lam p.
-                                   setInsert (head p) acc)
-                                (setEmpty nameInfoCmp) paths in
-          let startVals = mapKeys startVals in
-          let partition = create (length startVals) (lam. []) in
-          let partition =
-            mapi
-              (lam i. lam.
-                 filter (lam p. nameInfoEq (head p) (get startVals i)) paths)
-              partition
-          in
-          (startVals, partition)
-      in
-      recursive let work : NameInfo -> [[NameInfo]] -> [NameInfo] -> Expr =
-        lam incVarName. lam paths. lam acc.
-          let nonEmpty = filter (lam p. not (null p)) paths in
-          match partitionPaths nonEmpty with (startVals, partition) then
-            let branches =
-              mapi (lam i. lam n : NameInfo.
-                      let iv = callCtxLbl2Inc n.0 env in
-                      let count = callCtxLbl2Count n.0 env in
-                      let tmpName = nameSym "tmp" in
-                      bind_
-                        (nulet_ tmpName (deref_ (nvar_ incVarName)))
-                        (matchex_ (nvar_ tmpName) (pint_ count)
-                                  (work iv (map tail (get partition i))
-                                    (cons n acc))))
-                   startVals
-            in
-            let defaultVal =
-              if eqi (length nonEmpty) (length paths) then never_
-              else lookup (callCtxHole2Idx holeId acc env)
-            in
-            matchall_ (snoc branches defaultVal)
-          else never
-        in
-      let res = work incVarName (map reverse paths) [] in
+    let tree = treeEmpty (nameSym "", NoInfo ()) in
+    let tree = treeInsertMany nameInfoEq tree (map reverse paths) in
+
+    recursive let work : NameInfo -> [Tree] -> [NameInfo] -> Expr =
+      lam incVarName. lam children. lam acc.
+        match children with [] then never_
+        else
+          let branches = map (lam n : Tree.
+            match n with Leaf () then
+              lookup (callCtxHole2Idx holeId acc env)
+            else match n with Node {root = root, children = cs} then
+              let root : NameInfo = root in
+              let iv = callCtxLbl2Inc root.0 env in
+              let count = callCtxLbl2Count root.0 env in
+              let tmpName = nameSym "tmp" in
+              bind_
+                (nulet_ tmpName (deref_ (nvar_ incVarName)))
+                (matchex_ (nvar_ tmpName) (pint_ count)
+                          (work iv cs (cons root acc)))
+            else never) children
+          in matchall_ branches
+    in
+    match tree with Node {children = children} then
+      let res = work incVarName children [] in
       res
-    else never
+    else error "sentinel missing"
 
 -- Helper for creating a hidden equivalent of a public function and replace the
 -- public function with a forwarding call to the hidden function.
