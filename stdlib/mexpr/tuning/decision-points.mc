@@ -677,9 +677,12 @@ let _lookupCallCtx
               mapi (lam i. lam n : NameInfo.
                       let iv = callCtxLbl2Inc n.0 env in
                       let count = callCtxLbl2Count n.0 env in
-                      matchex_ (deref_ (nvar_ incVarName)) (pint_ count)
-                               (work iv (map tail (get partition i))
-                                  (cons n acc)))
+                      let tmpName = nameSym "tmp" in
+                      bind_
+                        (nulet_ tmpName (deref_ (nvar_ incVarName)))
+                        (matchex_ (nvar_ tmpName) (pint_ count)
+                                  (work iv (map tail (get partition i))
+                                    (cons n acc))))
                    startVals
             in
             let defaultVal =

@@ -497,11 +497,14 @@ let matchex_ = use MExprAst in
   lam target. lam pat. lam thn.
     match_ target pat thn never_
 
+-- TODO(Linnea, 2021-07-08): make general
 let matchall_ = use MExprAst in
   lam matches.
     foldr1 (lam m. lam acc.
       match m with TmMatch t then
         TmMatch {t with els = acc}
+      else match m with TmLet (t & {inexpr = TmMatch tt}) then
+        TmLet {t with inexpr = (TmMatch {tt with els = acc})}
       else never)
       matches
 
