@@ -9,6 +9,9 @@ include "tune-file.mc"
 
 -- Performs tuning of a flattened program with decision points.
 
+-- Start time of search.
+let tuneSearchStart = ref 0.
+
 -- Default input if program takes no input data
 let _inputEmpty = [""]
 
@@ -113,11 +116,14 @@ lang TuneLocalSearch = TuneBase + LocalSearchBase
       use MExprPrettyPrint in
       let incValues = map expr2str inc in
       let curValues = map expr2str cur in
+      let elapsed = subf (wallTimeMs ()) (deref tuneSearchStart) in
       printLn (join ["Iter: ", int2string iter, "\n",
                      "Current table: ", strJoin ", " curValues, "\n",
                      "Current time: ", float2string curTime, "\n",
                      "Best time: ", float2string incTime, "\n",
-                     "Best table: ", strJoin ", " incValues])
+                     "Best table: ", strJoin ", " incValues, "\n",
+                     "Elapsed ms: ", float2string elapsed
+                    ])
 
     else never
 
@@ -180,6 +186,7 @@ lang TuneLocalSearch = TuneBase + LocalSearchBase
     in
 
     -- Do warmup runs and throw away results
+    modref tuneSearchStart (wallTimeMs ());
     (if options.debug then
        fprintLn "----------------------- WARMUP RUNS -----------------------"
        else ());
@@ -189,6 +196,7 @@ lang TuneLocalSearch = TuneBase + LocalSearchBase
        else ());
 
     -- Do the search!
+    modref tuneSearchStart (wallTimeMs ());
     match search stop startState (initMeta startState) 0
     with (searchState, _) then
       let searchState : SearchState = searchState in
