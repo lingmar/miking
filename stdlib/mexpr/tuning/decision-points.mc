@@ -266,7 +266,7 @@ lang HoleAst = IntAst + ANF + KeywordMaker
       let depth = mapLookupOrElse (lam. int_ 0) "depth" bindings in
       validate
         (TmHole { default = default
-                , depth = depth
+                , depth = _expectConstInt info "depth" depth
                 , info = info
                 , ty = hty
                 , inner = holeMap bindings})
