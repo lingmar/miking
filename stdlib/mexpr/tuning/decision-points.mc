@@ -192,12 +192,6 @@ lang HoleAst = IntAst + ANF + KeywordMaker
   sem symbolizeExpr (env : SymEnv) =
   | TmHole h -> TmHole h
 
-  sem smap_Expr_Expr (f : Expr -> a) =
-  | TmHole h -> TmHole h
-
-  sem sfold_Expr_Expr (f : a -> b -> a) (acc : a) =
-  | TmHole h -> acc
-
   sem default =
   | TmHole {default = default} -> default
   | t -> smap_Expr_Expr default t
@@ -1118,7 +1112,9 @@ lang Holes =
 
 lang MExprHoles = Holes + MExprSym + MExprANF
 
-lang TestLang = MExprHoles + MExprEq + MExprPrettyPrint
+lang HolesPrettyPrint = MExprHoles + MExprPrettyPrint
+
+lang TestLang = HolesPrettyPrint + MExprEq
 
 mexpr
 

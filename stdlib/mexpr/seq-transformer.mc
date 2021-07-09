@@ -9,6 +9,7 @@ include "pprint.mc"
 include "ast-builder.mc"
 include "common.mc"
 include "utesttrans.mc"
+include "mexpr/tuning/decision-points.mc"
 
 let seqIndex = ref 0
 
@@ -39,15 +40,17 @@ utest _sample 1 1 with [1]
 -- utest sample 10 100 with [32,38,43,44,45,54,59,61,83,89]
 
 -- TODO: don't recurse in utest?
-lang SeqTransformer = SeqAst + VarAst + AppAst + UnknownTypeAst
+lang SeqTransformer = MExpr
   sem seqTransform (limit : Int) =
   | t ->
     let name =
       match findName "create" t with Some name then name
       else nameSym "createUnknown"
     in
-    let nbrSeqs = _seqCount 0 t in
+    let nbrSeqs = _seqCount t in
+    print "nbrSeqs = "; dprint nbrSeqs;
     let indices = _sample (mini limit nbrSeqs) nbrSeqs in
+    print "nbr indices : "; dprint (length indices);
     _seqTransform name indices t
 
   sem _seqTransform (create : Name) (indices : [Int]) =
@@ -70,9 +73,12 @@ lang SeqTransformer = SeqAst + VarAst + AppAst + UnknownTypeAst
     else TmSeq t
   | t -> smap_Expr_Expr (_seqTransform create indices) t
 
-  sem _seqCount (count : Int) =
-  | TmSeq _ -> addi count 1
-  | t -> sfold_Expr_Expr _seqCount count t
+  sem _seqCount =
+  | TmSeq {tms = tms} ->
+    let res = foldl addi 0 (map _seqCount tms) in
+    addi 1 res
+  | t ->
+    sfold_Expr_Expr addi 0 (smap_Expr_Expr _seqCount t)
 end
 
 lang TestLang = MExprAst + SeqTransformer + MExprPrettyPrint
@@ -83,11 +89,11 @@ use TestLang in
 
 let ast = seq_ [int_ 1, int_ 2, int_ 3] in
 
-let count = _seqCount 0 ast in
+let count = _seqCount ast in
 
 utest count with 1 in
-utest _seqCount 0 (int_ 0) with 0 in
-utest _seqCount 0 (bind_ (ulet_ "a" (seq_ [])) (seq_ [int_ 0])) with 2 in
+utest _seqCount (int_ 0) with 0 in
+utest _seqCount (bind_ (ulet_ "a" (seq_ [])) (seq_ [int_ 0])) with 2 in
 
 let t = seqTransform 1 ast in
 printLn (expr2str t);
