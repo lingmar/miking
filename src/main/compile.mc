@@ -18,7 +18,6 @@ include "ocaml/sys.mc"
 lang MCoreCompile =
   BootParser +
   MExprHoles +
-  SeqTransformer +
   MExprSym + MExprTypeAnnot + MExprUtestTrans +
   OCamlPrettyPrint + OCamlTypeDeclGenerate + OCamlGenerate +
   OCamlGenerateExternalNaive
@@ -72,9 +71,22 @@ let insertTunedOrDefaults = lam options : Options. lam ast. lam file.
       let table = tuneReadTable tuneFile in
       let ast = symbolize ast in
       let ast = normalizeTerm ast in
-      insert [] table ast
+      let t1 = wallTimeMs () in
+      let res = insert [] table ast in
+      let t2 = wallTimeMs () in
+      print "insert time: "; dprintLn (subf t2 t1); flushStdout ();
+      res
     else error (join ["Tune file ", tuneFile, " does not exist"])
   else default ast
+
+let seqTransform = lam options : Options. lam n. lam ast.
+  use SeqTransformer in
+  if options.seqTransform then
+    match n with [n] then
+      let n = string2int n in
+      seqTransform n ast
+    else error "expected one integer for seq transform"
+  else ast
 
 let ocamlCompile =
   lam options : Options. lam libs. lam sourcePath. lam ocamlProg.
@@ -137,21 +149,23 @@ let ocamlCompileAst = lam options : Options. lam sourcePath. lam mexprAst.
 -- options: the options structure to the main program
 -- args: the program arguments to the executed program, if any
 let compile = lam files. lam options : Options. lam args.
-  use MCoreCompile in
-  let compileFile = lam file.
-    let ast = makeKeywords [] (parseMCoreFile decisionPointsKeywords file) in
+  match partition stringIsInt files with (n, files) then
+    use MCoreCompile in
+    let compileFile = lam file.
+      let ast = makeKeywords [] (parseMCoreFile decisionPointsKeywords file) in
 
-    -- If option --enable-seq-transform, then transform sequence literals into
-    -- using create
-    let ast = if options.seqTransform then seqTransform ast else ast in
+      -- If option --enable-seq-transform, then transform sequence literals into
+      -- using create
+      let ast = seqTransform options n ast in
 
-    -- Insert tuned values, or use default values if no .tune file present
-    let ast = insertTunedOrDefaults options ast file in
+      -- If option --tuned, then insert tuned values into the AST
+      let ast = insertTunedOrDefaults options ast file in
 
-    -- If option --debug-parse, then pretty print the AST
-    (if options.debugParse then printLn (pprintMcore ast) else ());
+      -- If option --debug-parse, then pretty print the AST
+      (if options.debugParse then printLn (pprintMcore ast) else ());
 
-    -- Compile MExpr AST
-    ocamlCompileAst options file ast
-  in
-  iter compileFile files
+      -- Compile MExpr AST
+      ocamlCompileAst options file ast
+    in
+    iter compileFile files
+  else never

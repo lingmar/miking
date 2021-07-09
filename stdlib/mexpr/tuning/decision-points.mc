@@ -659,25 +659,51 @@ let _lookupCallCtx
       lam incVarName. lam children. lam acc.
         match children with [] then never_
         else
-          let branches = map (lam n : Tree.
-            match n with Leaf () then
-              lookup (callCtxHole2Idx holeId acc env)
-            else match n with Node {root = root, children = cs} then
+          let branches = foldl (lam cases: ([Expr], [Expr]). lam c.
+            match c with Leaf () then
+              (cons (lookup (callCtxHole2Idx holeId acc env)) cases.0, cases.1)
+            else match c with Node {root = root, children = cs} then
               let root : NameInfo = root in
               let iv = callCtxLbl2Inc root.0 env in
               let count = callCtxLbl2Count root.0 env in
               let tmpName = nameSym "tmp" in
-              bind_
-                (nulet_ tmpName (deref_ (nvar_ incVarName)))
-                (matchex_ (nvar_ tmpName) (pint_ count)
-                          (work iv cs (cons root acc)))
-            else never) children
-          in matchall_ branches
+              let branch =
+                bind_
+                  (nulet_ tmpName (deref_ (nvar_ incVarName)))
+                  (matchex_ (nvar_ tmpName) (pint_ count)
+                            (work iv cs (cons root acc)))
+              in (cases.0, cons branch cases.1)
+            else never
+          ) ([], []) children in
+          match branches with (defaultCase, matches) then
+            let default = switch defaultCase
+              case [] then never_
+              case [default] then default
+              case _ then error "expected at most one default case"
+              end
+            in
+            matchall_ (snoc matches default)
+          else never
+
+          -- let branches = map (lam n : Tree.
+          --   match n with Leaf () then
+          --     lookup (callCtxHole2Idx holeId acc env)
+          --   else match n with Node {root = root, children = cs} then
+          --     let root : NameInfo = root in
+          --     let iv = callCtxLbl2Inc root.0 env in
+          --     let count = callCtxLbl2Count root.0 env in
+          --     let tmpName = nameSym "tmp" in
+          --     bind_
+          --       (nulet_ tmpName (deref_ (nvar_ incVarName)))
+          --       (matchex_ (nvar_ tmpName) (pint_ count)
+          --                 (work iv cs (cons root acc)))
+          --   else never) children
+          -- in matchall_ branches
     in
     match tree with Node {children = children} then
       let res = work incVarName children [] in
       res
-    else error "sentinel missing"
+    else error "sentinel node missing"
 
 -- Helper for creating a hidden equivalent of a public function and replace the
 -- public function with a forwarding call to the hidden function.
@@ -720,7 +746,8 @@ lang FlattenHoles = Ast2CallGraph + HoleAst + IntAst
     then
       let tempDir = sysTempDirMake () in
       let tuneFile = sysJoinPath tempDir ".tune" in
-      { ast = _wrapReadFile env tuneFile prog
+      let ast = _wrapReadFile env tuneFile prog in
+      { ast = ast
       , table = _initAssignments env
       , tempFile = tuneFile
       , cleanup = lam. sysTempDirDelete tempDir
@@ -964,12 +991,6 @@ lang FlattenHoles = Ast2CallGraph + HoleAst + IntAst
       in work
     in
     let eqString = eqSeq eqc in
-
-    recursive
-      let foldl = lam f. lam acc. lam seq.
-      if null seq then acc
-      else foldl f (f acc (head seq)) (tail seq)
-    in
 
     let join = lam seqs. foldl concat [] seqs in
 

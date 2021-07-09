@@ -11,7 +11,7 @@ include "mexpr/tuning/transfer-tuning.mc"
 include "ocaml/sys.mc"
 
 lang MCoreTune =
-  BootParser + MExprHoles + MExprTune + SeqTransformer
+  BootParser + MExprHoles + MExprTune
 end
 
 let tableFromFile = lam file.
@@ -34,7 +34,8 @@ let transferTune = lam options : Options. lam table. lam file. lam tuneFiles. la
 
 let tune = lam files. lam options : Options. lam args.
 
-  match partition (isSuffix eqc ".tune") files with (tuneFiles, files) then
+  match partition (isSuffix eqc ".tune") files with (tuneFiles, nonTunes) then
+  match partition stringIsInt nonTunes with (n, files) then
 
     let tuneFile = lam file.
       use MCoreTune in
@@ -42,13 +43,15 @@ let tune = lam files. lam options : Options. lam args.
 
       -- If option --enable-seq-transform, then transform sequence literals into
       -- using create
-      let ast = if options.seqTransform then seqTransform ast else ast in
+      let ast = seqTransform options n ast in
 
       -- If option --debug-parse, then pretty print the AST
       (if options.debugParse then printLn (expr2str ast) else ());
 
       let ast = symbolize ast in
       let ast = normalizeTerm ast in
+
+      printLn "before flattening";
 
       let t1 = wallTimeMs () in
       -- Flatten the decision points
@@ -59,6 +62,7 @@ let tune = lam files. lam options : Options. lam args.
         let t2 = wallTimeMs () in
 
         print "flattening time = "; dprint (divf (subf t2 t1) 1000.);
+        flushStdout ();
 
         -- If option --use-tuned is given, then use given tune file as defaults
         let table =
@@ -73,6 +77,7 @@ let tune = lam files. lam options : Options. lam args.
         let table = transferTune options table file tuneFiles env in
         let t2 = wallTimeMs () in
         print "transfer tuning time = "; dprint (divf (subf t2 t1) 1000.);
+        flushStdout ();
 
         -- Compile the program
         let binary = ocamlCompileAst options file ast in
@@ -91,7 +96,7 @@ let tune = lam files. lam options : Options. lam args.
         -- If option --compile is given, then compile the program using the
         -- tuned values
         (if options.compileAfterTune then
-           compile files {options with useTuned = true} args
+           compile nonTunes {options with useTuned = true} args
          else ());
 
         -- Clean up temporary files used during tuning
@@ -99,4 +104,4 @@ let tune = lam files. lam options : Options. lam args.
       else never
     in
     iter tuneFile files
-  else never
+  else never else never
