@@ -19,6 +19,10 @@ let hcreate = lam n. lam f.
 let create = lam n. lam f.
   hcreate n f
 
+let createDefault = createRope
+
+let _foo = print ""; createDefault
+
 -- Logical NOT
 let not: Bool -> Bool =
   lam a. if a then false else true

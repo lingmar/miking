@@ -43,17 +43,21 @@ utest _sample 1 1 with [1]
 lang SeqTransformer = MExpr
   sem seqTransform (limit : Int) =
   | t ->
-    let name =
+    let nameCreate =
       match findName "create" t with Some name then name
       else nameSym "createUnknown"
     in
+    let nameDefault =
+      match findName "createDefault" t with Some name then name
+      else nameSym "createDefaultUnknown"
+    in
     let nbrSeqs = _seqCount t in
-    print "nbrSeqs = "; dprint nbrSeqs;
+    print "nbrSeqs = "; dprint nbrSeqs; flushStdout ();
     let indices = _sample (mini limit nbrSeqs) nbrSeqs in
     print "nbr indices : "; dprint (length indices);
-    _seqTransform name indices t
+    _seqTransform nameCreate nameDefault indices t
 
-  sem _seqTransform (create : Name) (indices : [Int]) =
+  sem _seqTransform (create : Name) (default : Name) (indices : [Int]) =
   | TmSeq ({tms = tms, info = info} & t) ->
     let curIdx = deref seqIndex in
     modref seqIndex (addi (deref seqIndex) 1);
@@ -66,12 +70,24 @@ lang SeqTransformer = MExpr
                       }
         , rhs =
           let i = nameSym "i" in
-          nulam_ i (get_ (seq_ (map (_seqTransform create indices) tms)) (nvar_ i))
+          nulam_ i (get_ (seq_ (map (_seqTransform create default indices) tms)) (nvar_ i))
         , ty = tyunknown_
         , info = info
         }
-    else TmSeq t
-  | t -> smap_Expr_Expr (_seqTransform create indices) t
+    else
+      TmApp
+        { lhs = TmApp { lhs = TmVar {ident = default, ty = tyunknown_, info = info}
+                      , rhs = int_ (length tms)
+                      , ty = tyunknown_
+                      , info = info
+                      }
+        , rhs =
+          let i = nameSym "i" in
+          nulam_ i (get_ (seq_ (map (_seqTransform create default indices) tms)) (nvar_ i))
+        , ty = tyunknown_
+        , info = info
+        }
+  | t -> smap_Expr_Expr (_seqTransform create default indices) t
 
   sem _seqCount =
   | TmSeq {tms = tms} ->
