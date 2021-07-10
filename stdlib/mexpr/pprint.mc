@@ -657,12 +657,7 @@ end
 
 lang CharPrettyPrint = CharAst + ConstPrettyPrint
   sem getConstStringCode (indent : Int) =
-  | CChar {val = '\n'} -> "\\n"
-  | CChar {val = '\t'} -> "\\t"
-  | CChar {val = '\\'} -> "\\\\"
-  | CChar {val = '\''} -> "\\'"
-  | CChar {val = '\"'} -> "\\\""
-  | CChar c -> ['\'', c.val, '\'']
+  | CChar c -> join ["\'", escapeChar c.val, "\'"]
 end
 
 lang CmpCharPrettyPrint = CmpCharAst + ConstPrettyPrint
@@ -769,7 +764,7 @@ lang MapPrettyPrint = MapAst + ConstPrettyPrint
   | CMapEmpty _ -> "mapEmpty"
   | CMapInsert _ -> "mapInsert"
   | CMapRemove _ -> "mapRemove"
-  | CMapFindWithExn _ -> "mapFind"
+  | CMapFindWithExn _ -> "mapFindWithExn"
   | CMapFindOrElse _ -> "mapFindOrElse"
   | CMapFindApplyOrElse _ -> "mapFindApplyOrElse"
   | CMapBindings _ -> "mapBindings"

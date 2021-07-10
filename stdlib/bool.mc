@@ -19,7 +19,8 @@ let hcreate = lam n. lam f.
 let create = lam n. lam f.
   hcreate n f
 
-let createDefault = createRope
+let createDefault = lam n. lam f.
+  createRope n f
 
 let _foo = print ""; createDefault
 

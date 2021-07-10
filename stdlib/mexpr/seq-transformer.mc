@@ -87,6 +87,7 @@ lang SeqTransformer = MExpr
         , ty = tyunknown_
         , info = info
         }
+      -- TmSeq t
   | t -> smap_Expr_Expr (_seqTransform create default indices) t
 
   sem _seqCount =

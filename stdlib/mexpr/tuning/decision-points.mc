@@ -653,6 +653,7 @@ let _lookupCallCtx
       lam incVarName. lam children. lam acc.
         match children with [] then never_
         else
+          let tmpName = nameSym "tmp" in
           let branches = foldl (lam cases: ([Expr], [Expr]). lam c.
             match c with Leaf () then
               (cons (lookup (callCtxHole2Idx holeId acc env)) cases.0, cases.1)
@@ -660,10 +661,7 @@ let _lookupCallCtx
               let root : NameInfo = root in
               let iv = callCtxLbl2Inc root.0 env in
               let count = callCtxLbl2Count root.0 env in
-              let tmpName = nameSym "tmp" in
               let branch =
-                bind_
-                  (nulet_ tmpName (deref_ (nvar_ incVarName)))
                   (matchex_ (nvar_ tmpName) (pint_ count)
                             (work iv cs (cons root acc)))
               in (cases.0, cons branch cases.1)
@@ -676,7 +674,9 @@ let _lookupCallCtx
               case _ then error "expected at most one default case"
               end
             in
-            matchall_ (snoc matches default)
+            bind_
+              (nulet_ tmpName (deref_ (nvar_ incVarName)))
+              (matchall_ (snoc matches default))
           else never
 
           -- let branches = map (lam n : Tree.
@@ -899,10 +899,9 @@ lang FlattenHoles = Ast2CallGraph + HoleAst + IntAst
                        (eqPaths : Map NameInfo [Path]) (cur : NameInfo) =
   -- Application: caller updates incoming variable of callee
   | TmLet ({ body = TmApp a } & t) ->
-    -- NOTE(Linnea, 2021-01-29): ANF form means no recursion necessary for the
-    -- application node (can only contain values)
     let le =
-      TmLet {t with inexpr = _maintainCallCtx lookup env eqPaths cur t.inexpr}
+      TmLet {{t with inexpr = _maintainCallCtx lookup env eqPaths cur t.inexpr}
+                with body = _maintainCallCtx lookup env eqPaths cur t.body}
     in
     -- Track call only if edge is part of the call graph
     match env with { callGraph = callGraph } then

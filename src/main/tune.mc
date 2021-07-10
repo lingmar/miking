@@ -61,8 +61,7 @@ let tune = lam files. lam options : Options. lam args.
       then
         let t2 = wallTimeMs () in
 
-        print "flattening time = "; dprint (divf (subf t2 t1) 1000.);
-        flushStdout ();
+        print "flattening time = "; dprint (divf (subf t2 t1) 1000.); flushStdout ();
 
         -- If option --use-tuned is given, then use given tune file as defaults
         let table =
@@ -80,7 +79,10 @@ let tune = lam files. lam options : Options. lam args.
         flushStdout ();
 
         -- Compile the program
+        let t1 = wallTimeMs () in
         let binary = ocamlCompileAst options file ast in
+        let t2 = wallTimeMs () in
+        print "compilation time = "; dprint (divf (subf t2 t1) 1000.); flushStdout ();
 
         -- Runs the program with a given input
         let run = lam args : String.
