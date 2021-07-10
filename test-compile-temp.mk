@@ -46,6 +46,7 @@ compile_files += stdlib/mexpr/pprint.mc
 compile_files += stdlib/mexpr/parser.mc
 compile_files += stdlib/mexpr/cps.mc
 compile_files += stdlib/mexpr/tuning/decision-points.mc
+compile_files += stdlib/mexpr/tuning/tree.mc
 compile_files += stdlib/mexpr/tuning/tune.mc
 compile_files += stdlib/mexpr/tuning/tune-options.mc
 compile_files += stdlib/mexpr/tuning/eq-paths.mc
