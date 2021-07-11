@@ -1,5 +1,4 @@
-include "seq.mc"
-include "common.mc"
+
 include "multicore/thread-pool.mc"
 include "mexpr/tuning/decision-points-boot.mc"
 

@@ -9,6 +9,7 @@ include "mexpr/utesttrans.mc"
 include "mexpr/tuning/decision-points.mc"
 include "mexpr/tuning/tune.mc"
 include "mexpr/seq-transformer.mc"
+include "mexpr/map-transformer.mc"
 include "ocaml/ast.mc"
 include "ocaml/generate.mc"
 include "ocaml/pprint.mc"
@@ -88,6 +89,12 @@ let seqTransform = lam options : Options. lam n. lam ast.
     else error "expected one integer for seq transform"
   else ast
 
+let mapTransform = lam options : Options. lam ast.
+  use MapTransformer in
+  if options.mapTransform then
+    mapTransform ast
+  else ast
+
 let ocamlCompile =
   lam options : Options. lam libs. lam sourcePath. lam ocamlProg.
   let compileOptions : CompileOptions =
@@ -157,6 +164,9 @@ let compile = lam files. lam options : Options. lam args.
       -- If option --enable-seq-transform, then transform sequence literals into
       -- using create
       let ast = seqTransform options n ast in
+
+      -- If option --enable-map-transform, then transform maps into using hmap
+      let ast = mapTransform options ast in
 
       -- If option --tuned, then insert tuned values into the AST
       let ast = insertTunedOrDefaults options ast file in

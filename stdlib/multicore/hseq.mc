@@ -1,4 +1,3 @@
-include "seq.mc"
 include "multicore/pseq.mc"
 include "mexpr/tuning/decision-points-boot.mc"
 
@@ -19,3 +18,6 @@ let hiter = lam f. lam seq.
     iter f seq
   else
     piter f seq
+
+mexpr
+(hmap, hfold, hiter)

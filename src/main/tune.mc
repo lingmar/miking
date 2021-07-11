@@ -45,6 +45,9 @@ let tune = lam files. lam options : Options. lam args.
       -- using create
       let ast = seqTransform options n ast in
 
+      -- If option --enable-map-transform, then transform maps into using hmap
+      let ast = mapTransform options ast in
+
       -- If option --debug-parse, then pretty print the AST
       (if options.debugParse then printLn (expr2str ast) else ());
 
