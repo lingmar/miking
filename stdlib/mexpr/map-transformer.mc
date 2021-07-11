@@ -911,9 +911,8 @@ in
 let chunkWork: ([a]) -> ((([a]) -> (b)) -> ([b])) =
   lam seq.
     lam f.
-      print \"chunk work!\";
       let chunkSize =
-        1000000
+        hole (IntRange {min = 1, max = 1000000, depth = 4, default = 100000})
       in
       let chunks =
         split
