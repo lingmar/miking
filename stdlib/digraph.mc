@@ -146,7 +146,7 @@ let digraphAddEdge = lam v1. lam v2. lam l. lam g : Digraph v l.
   with false in
 
   let oldEdgeList =
-    mapLookupOrElse (lam. error "Edge not found") v1 g.adj
+    mapLookupOrElse (lam. error "Vertex not found") v1 g.adj
   in
   {g with adj = mapInsert v1 (snoc oldEdgeList (v2, l)) g.adj}
 

@@ -60,11 +60,12 @@ let tune = lam files. lam options : Options. lam args.
       -- Flatten the decision points
       match flatten [] ast with
         { ast = ast, table = table, tempFile = tempFile, cleanup = cleanup,
-          env = env }
+          env = env, tempDir = tempDir }
       then
         let t2 = wallTimeMs () in
 
         print "flattening time = "; dprint (divf (subf t2 t1) 1000.); flushStdout ();
+        -- printLn (use MExprPrettyPrint in expr2str ast);
 
         -- If option --use-tuned is given, then use given tune file as defaults
         let table =
@@ -81,15 +82,18 @@ let tune = lam files. lam options : Options. lam args.
         print "transfer tuning time = "; dprint (divf (subf t2 t1) 1000.);
         flushStdout ();
 
-        -- Compile the program
+        -- Compile the program and move to temporary directory
         let t1 = wallTimeMs () in
         let binary = ocamlCompileAst options file ast in
+        let tempPath = sysJoinPath tempDir "tune" in
+        sysMoveFile binary tempPath;
+        let binary = tempPath in
         let t2 = wallTimeMs () in
         print "compilation time = "; dprint (divf (subf t2 t1) 1000.); flushStdout ();
 
         -- Runs the program with a given input
         let run = lam args : String.
-          sysTimeCommand (cons (join ["./", binary]) args) "" "."
+          sysTimeCommand (cons binary args) "" "."
         in
 
         -- Do the tuning

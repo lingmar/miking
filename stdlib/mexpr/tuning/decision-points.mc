@@ -49,9 +49,6 @@ let _nameMapInit : [a] -> (a -> Name) -> (a -> v) -> Map Name v =
       (mapEmpty nameCmp)
       items
 
-let _distinct = lam cmp. lam seq.
-  setToSeq (setOfSeq cmp seq)
-
 -------------------------
 -- Call graph creation --
 -------------------------
@@ -721,6 +718,7 @@ let _argv = nameSym "argv"
 type Flattened =
 { ast : Expr           -- The flattened ast
 , table : LookupTable  -- The initial lookup table
+, tempDir : String     -- The temporary directory
 , tempFile : String    -- The file from which decision point values are read
 , cleanup : () -> ()   -- Removes all temporary files from the disk
 , env : CallCtxEnv     -- Call context environment
@@ -743,6 +741,7 @@ lang FlattenHoles = Ast2CallGraph + HoleAst + IntAst
       let ast = _wrapReadFile env tuneFile prog in
       { ast = ast
       , table = _initAssignments env
+      , tempDir = tempDir
       , tempFile = tuneFile
       , cleanup = lam. sysTempDirDelete tempDir
       , env = env
@@ -781,8 +780,6 @@ lang FlattenHoles = Ast2CallGraph + HoleAst + IntAst
       nameInfoCmp e1.2 e2.2
     in
     let keepEdges = setToSeq (setOfSeq edgeCmp keepEdges) in
-
-    let keepEdges = _distinct edgeCmp keepEdges in
 
     let pruned = foldl (lam acc. lam e : DigraphEdge NameInfo NameInfo.
       match e with (from, to, lbl) then
