@@ -84,10 +84,11 @@ let tune = lam files. lam options : Options. lam args.
 
         -- Compile the program and move to temporary directory
         let t1 = wallTimeMs () in
-        let binary = ocamlCompileAst options file ast in
-        let tempPath = sysJoinPath tempDir "tune" in
-        sysMoveFile binary tempPath;
-        let binary = tempPath in
+
+        let binary = ocamlCompileAst
+          {options with destination = Some (sysJoinPath tempDir "tune")} file ast
+        in
+
         let t2 = wallTimeMs () in
         print "compilation time = "; dprint (divf (subf t2 t1) 1000.); flushStdout ();
 

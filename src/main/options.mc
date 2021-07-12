@@ -16,7 +16,8 @@ type Options = {
   help : Bool,
   transferTune : Bool,
   useDefaultTuneFile : Bool,
-  compileAfterTune : Bool
+  compileAfterTune : Bool,
+  destination : Option String
 }
 
 -- Option structure
@@ -33,7 +34,8 @@ let options = {
   help = false,
   transferTune = false,
   useDefaultTuneFile = false,
-  compileAfterTune = false
+  compileAfterTune = false,
+  destination = None ()
 }
 
 -- Option map, maps strings to structure updates

@@ -107,7 +107,12 @@ let ocamlCompile =
     }
   in
   let p : CompileResult = ocamlCompileWithConfig compileOptions ocamlProg in
-  let destinationFile = filenameWithoutExtension (filename sourcePath) in
+  let destinationFile =
+    switch options.destination
+    case None () then filenameWithoutExtension (filename sourcePath)
+    case Some destination then destination
+    end
+  in
   sysMoveFile p.binaryPath destinationFile;
   sysChmodWriteAccessFile destinationFile;
   p.cleanup ();
